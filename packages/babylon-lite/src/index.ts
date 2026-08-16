@@ -1280,7 +1280,7 @@ export { buildNodeParticleSetWithEmitterProvider, withNodeParticleEmitterProvide
 export { buildNodeParticleSetWithNoiseTextures } from "./particle/node/npe-noise.js";
 export { buildNodeParticleSetWithTextureUpdates } from "./particle/node/npe-texture-updates.js";
 export type { ParticleSystem } from "./particle/particle-system.js";
-export { animateParticleSystem, startParticleSystem, stopParticleSystem, isParticleSystemStarted } from "./particle/particle-system.js";
+export { animateParticleSystem, createParticleSystem, startParticleSystem, stopParticleSystem, isParticleSystemStarted } from "./particle/particle-system.js";
 export type { RegisterNodeParticleOptions } from "./particle/particle-scene.js";
 export { registerNodeParticleSet, getParticleSystems } from "./particle/particle-scene.js";
 export { createParticleBillboard, syncParticleBillboard } from "./particle/particle-billboard.js";

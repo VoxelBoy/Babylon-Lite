@@ -279,3 +279,146 @@ export function disposeComputeShader(shader: ComputeShader): void {
     shader._bindings.clear();
     shader._destroyed = true;
 }
+
+// ─── Many binding sets per program, one submission per batch ────────────────
+//
+// A `ComputeShader` carries exactly one set of bound buffers, so running the
+// same program over several independent data sets meant creating several
+// programs — and a separate pipeline for each, for identical WGSL. And every
+// `dispatchCompute` builds its own encoder and submits, so N data sets cost N
+// submissions per frame where one would do.
+//
+// Both matter for the case this seam exists to serve. A GPU-generated world
+// batches its work per source object (per body, per volume, per emitter): the
+// program is one, the parameter buffers are many, and they are dispatched
+// together. `ComputeBindings` separates "which program" from "which data", and
+// `dispatchComputeBatch` records a whole frame's dispatches into one command
+// buffer.
+
+declare const computeBindingsBrand: unique symbol;
+
+/** A reusable set of storage bindings for one `ComputeShader`. Create with {@link createComputeBindings}. */
+export interface ComputeBindings {
+    readonly [computeBindingsBrand]: true;
+    readonly name: string;
+    /** @internal */ readonly _shader: ComputeShader;
+    /** @internal */ readonly _bindings: Map<string, StorageBuffer>;
+    /** @internal */ _bindGroup: GPUBindGroup | null;
+    /** @internal */ _dirty: boolean;
+    /** @internal */ _destroyed: boolean;
+}
+
+/**
+ * Create an additional binding set for `shader`.
+ *
+ * The program's pipeline, layout and uniform buffer are shared; only the bound
+ * storage buffers differ. Uniforms stay on the shader, since they are constant
+ * across a dispatch by definition — per-set data belongs in a storage buffer.
+ */
+export function createComputeBindings(shader: ComputeShader, name?: string): ComputeBindings {
+    if (shader._destroyed) throw new Error(`ComputeShader "${shader.name}" has been disposed.`);
+    return {
+        name: name ?? `${shader.name}-bindings`,
+        _shader: shader,
+        _bindings: new Map<string, StorageBuffer>(),
+        _bindGroup: null,
+        _dirty: true,
+        _destroyed: false,
+    } as unknown as ComputeBindings;
+}
+
+/** Bind a storage allocation within a binding set. */
+export function setComputeBindingsStorageBuffer(bindings: ComputeBindings, name: string, buffer: StorageBuffer): void {
+    if (bindings._destroyed) throw new Error(`ComputeBindings "${bindings.name}" has been disposed.`);
+    const shader = bindings._shader;
+    const decl = shader._storageDecls.find((d) => d.name === name);
+    if (!decl) throw new Error(`ComputeBindings "${bindings.name}": storage buffer "${name}" was not declared on "${shader.name}".`);
+    if (decl.writable && !buffer._writable) {
+        throw new Error(`ComputeBindings "${bindings.name}": binding "${name}" is read_write, so its StorageBuffer must be created with { writable: true }.`);
+    }
+    bindings._bindings.set(name, buffer);
+    bindings._dirty = true;
+}
+
+/** Release the binding set. The program and the bound buffers are not owned or freed. */
+export function disposeComputeBindings(bindings: ComputeBindings): void {
+    bindings._bindGroup = null;
+    bindings._bindings.clear();
+    bindings._destroyed = true;
+}
+
+/** One dispatch within a {@link dispatchComputeBatch}. */
+export interface ComputeDispatch {
+    readonly shader: ComputeShader;
+    /** Binding set to run against. Defaults to the shader's own bindings. */
+    readonly bindings?: ComputeBindings;
+    readonly x: number;
+    readonly y?: number;
+    readonly z?: number;
+}
+
+/**
+ * Record several dispatches into ONE command buffer and submit once.
+ *
+ * Equivalent to calling `dispatchCompute` per item, minus the per-item encoder
+ * and submission. Dispatches execute in array order.
+ *
+ * Uniform writes are flushed once per shader before recording begins. That is
+ * the same ordering hazard `dispatchCompute` documents: `queue.writeBuffer` is
+ * ordered against submission, not recording, so two dispatches in one batch
+ * cannot see different uniform values — vary per-dispatch data through the
+ * binding set's storage buffers instead.
+ */
+export function dispatchComputeBatch(engine: EngineContext, dispatches: readonly ComputeDispatch[]): void {
+    if (dispatches.length === 0) return;
+    const device = engine._device;
+    const flushed = new Set<ComputeShader>();
+    for (const d of dispatches) {
+        const shader = d.shader;
+        if (shader._destroyed) throw new Error(`ComputeShader "${shader.name}" has been disposed.`);
+        if (shader._engine !== engine) throw new Error(`ComputeShader "${shader.name}" belongs to a different engine.`);
+        if (!(d.x > 0 && (d.y ?? 1) > 0 && (d.z ?? 1) > 0)) throw new Error(`ComputeShader "${shader.name}": workgroup counts must all be positive.`);
+        if (d.bindings && d.bindings._shader !== shader) {
+            throw new Error(`ComputeBindings "${d.bindings.name}" belongs to a different ComputeShader than "${shader.name}".`);
+        }
+        if (!flushed.has(shader)) {
+            flushed.add(shader);
+            if (shader._uboDirty && shader._uboBuffer && shader._uboData) {
+                device.queue.writeBuffer(shader._uboBuffer, 0, shader._uboData);
+                shader._uboDirty = false;
+            }
+        }
+    }
+
+    const encoder = device.createCommandEncoder({ label: `${dispatches[0]!.shader.name}-batch-encoder` });
+    const pass = encoder.beginComputePass({ label: `${dispatches[0]!.shader.name}-batch-pass` });
+    let lastPipeline: GPUComputePipeline | null = null;
+    for (const d of dispatches) {
+        const pipeline = ensurePipeline(d.shader);
+        if (pipeline !== lastPipeline) {
+            pass.setPipeline(pipeline);
+            lastPipeline = pipeline;
+        }
+        pass.setBindGroup(0, d.bindings ? ensureBindingsGroup(d.bindings) : ensureBindGroup(d.shader));
+        pass.dispatchWorkgroups(d.x, d.y ?? 1, d.z ?? 1);
+    }
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+}
+
+function ensureBindingsGroup(bindings: ComputeBindings): GPUBindGroup {
+    if (bindings._bindGroup && !bindings._dirty) return bindings._bindGroup;
+    if (bindings._destroyed) throw new Error(`ComputeBindings "${bindings.name}" has been disposed.`);
+    const shader = bindings._shader;
+    const entries: GPUBindGroupEntry[] = [];
+    let binding = 0;
+    if (shader._uboBuffer) entries.push({ binding: binding++, resource: { buffer: shader._uboBuffer } });
+    for (const decl of shader._storageDecls) {
+        const bound = bindings._bindings.get(decl.name);
+        if (!bound) throw new Error(`ComputeBindings "${bindings.name}": storage buffer "${decl.name}" was declared but never bound.`);
+        entries.push({ binding: binding++, resource: { buffer: _getStorageBufferHandle(shader._engine, bound) } });
+    }
+    bindings._bindGroup = shader._engine._device.createBindGroup({ label: `${bindings.name}-bindgroup`, layout: bindGroupLayout(shader), entries });
+    bindings._dirty = false;
+    return bindings._bindGroup;
+}

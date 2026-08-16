@@ -309,6 +309,26 @@ export interface EngineOptions extends SurfaceOptions {
      * pattern as the F64 storage module).
      */
     useFloatingOrigin?: boolean;
+    /**
+     * Called when the WebGPU device is lost. NOTIFICATION ONLY — nothing is
+     * recovered, rebuilt, or retried.
+     *
+     * Lite's other device-lost entry points (`enableDeviceLostSceneRecovery`
+     * and friends) bundle notification with best-effort recovery. That is the
+     * right default, but it is not the only correct policy: an application
+     * whose GPU-resident state cannot be rebuilt coherently is better off
+     * stopping and saying so than resuming with half its resources orphaned.
+     * Such an application still needs to KNOW, and the only alternative was to
+     * reach past the public API for `engine._device.lost`.
+     *
+     * Fires for every loss reason including `"destroyed"`, so a caller that
+     * treats teardown as normal must check `info.reason` itself — filtering it
+     * here would hide a real loss that happened to report that reason.
+     *
+     * Independent of the recovery enablers: setting this does not enable
+     * recovery, and enabling recovery does not suppress this.
+     */
+    onDeviceLost?: (info: GPUDeviceLostInfo) => void;
 }
 
 /** Create the Babylon Lite engine bound to `canvas`. Acquires the GPU adapter + device,
@@ -342,6 +362,13 @@ export async function createEngine(canvas: RenderCanvas, options?: EngineOptions
         }
     }
     const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits: options?.requiredLimits });
+
+    // Subscribed here, before anything else can fail, so a loss during setup is
+    // still reported. Notification only — see EngineOptions.onDeviceLost.
+    const onDeviceLost = options?.onDeviceLost;
+    if (onDeviceLost) {
+        void device.lost.then((info) => onDeviceLost(info));
+    }
 
     // eslint-disable-next-line no-console
     console.log(`${_ENGINE_TAG} - WebGPU engine`);

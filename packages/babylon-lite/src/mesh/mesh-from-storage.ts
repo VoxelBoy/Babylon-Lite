@@ -32,8 +32,22 @@ import { _getStorageBufferHandle, type StorageBuffer } from "../resource/storage
 export interface MeshFromStorageOptions {
     /** Vertex source. Must be `writable: true, vertex: true`. */
     readonly storage: StorageBuffer;
-    /** Triangle indices. Uploaded once; index topology is static per chunk. */
-    readonly indices: Uint32Array;
+    /** Triangle indices.
+     *
+     *  A `Uint32Array` is uploaded into a fresh index buffer owned by this mesh —
+     *  right when the mesh has topology of its own.
+     *
+     *  A `StorageBuffer` created with `{ index: true }` is used in place, SHARED with
+     *  every other mesh given the same allocation. That is the right form for a slab of
+     *  uniform slots, where every slot's indices are byte-identical and uploading them
+     *  per mesh would duplicate the same kilobytes thousands of times. A shared
+     *  allocation is NOT freed with the mesh; it outlives the meshes and the caller
+     *  disposes it. */
+    readonly indices: Uint32Array | StorageBuffer;
+    /** Number of indices to draw. Required when `indices` is a shared allocation, since
+     *  its byte length is padded and need not equal the draw count. Defaults to the
+     *  typed array's length. */
+    readonly indexCount?: number;
     /** Number of vertices addressed by `indices`, used for validation only. */
     readonly vertexCount: number;
     /** Byte stride of one vertex inside `storage`. Must match the material's `vertexLayout`. */
@@ -66,7 +80,15 @@ export function createMeshFromStorageBuffer(engine: EngineContext, name: string,
     }
 
     const vertexBuffer = _getStorageBufferHandle(engine, storage);
-    const indexBuffer = createMappedBuffer(engine, indices, BU.INDEX, `${name}-indices`);
+    const sharedIndices = !(indices instanceof Uint32Array);
+    if (sharedIndices && !(indices as StorageBuffer)._index) {
+        throw new Error("createMeshFromStorageBuffer: a StorageBuffer passed as `indices` must be created with { index: true } so it carries GPUBufferUsage.INDEX.");
+    }
+    const indexCount = options.indexCount ?? (sharedIndices ? 0 : (indices as Uint32Array).length);
+    if (indexCount <= 0) {
+        throw new Error("createMeshFromStorageBuffer: `indexCount` is required when `indices` is a shared allocation (its byte length is padded and need not equal the draw count).");
+    }
+    const indexBuffer = sharedIndices ? _getStorageBufferHandle(engine, indices as StorageBuffer) : createMappedBuffer(engine, indices as Uint32Array, BU.INDEX, `${name}-indices`);
 
     const mesh = initMeshTransform({
         name,
@@ -81,9 +103,13 @@ export function createMeshFromStorageBuffer(engine: EngineContext, name: string,
             normalBuffer: vertexBuffer,
             uvBuffer: vertexBuffer,
             indexBuffer,
-            indexCount: indices.length,
+            indexCount,
             indexFormat: "uint32",
             _baseVertex: baseVertex,
+            // The slab belongs to whoever created it and is shared with every other
+            // mesh holding a slot; this mesh only borrows it.
+            _ownsVertexBuffers: false,
+            _ownsIndexBuffer: !sharedIndices,
         },
     });
 

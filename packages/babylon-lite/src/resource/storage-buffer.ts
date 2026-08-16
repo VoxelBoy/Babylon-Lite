@@ -24,6 +24,8 @@ export interface StorageBuffer {
     readonly _writable?: boolean;
     /** @internal Carries `GPUBufferUsage.VERTEX`, so a mesh can source geometry from it. */
     readonly _vertex?: boolean;
+    /** @internal Carries `GPUBufferUsage.INDEX`, so many meshes can share one topology. */
+    readonly _index?: boolean;
 }
 
 /** Options for {@link createStorageBuffer}. */
@@ -40,6 +42,15 @@ export interface StorageBufferOptions {
     /** Also mark the allocation `GPUBufferUsage.VERTEX` so a mesh can draw straight from
      *  it — letting a compute pass produce geometry with no readback and no copy. */
     readonly vertex?: boolean;
+    /** Also mark the allocation `GPUBufferUsage.INDEX` so meshes can SHARE one topology.
+     *
+     *  `createMeshFromStorageBuffer` uploads a fresh index buffer per mesh when given a
+     *  typed array, which is right for meshes with their own topology and wrong for a
+     *  slab of uniform slots: every slot in such a slab has byte-identical indices, so
+     *  a few thousand of them duplicate the same kilobytes a few thousand times. Pass
+     *  one `index: true` allocation to every mesh instead and the topology is uploaded
+     *  once. The allocation outlives the meshes and is the caller's to dispose. */
+    readonly index?: boolean;
 }
 
 /** Create a shader storage buffer.
@@ -49,14 +60,14 @@ export interface StorageBufferOptions {
  *  Defaults to a read-only, CPU-initialized buffer — pass `writable`/`vertex` to opt in. */
 export function createStorageBuffer(engine: EngineContext, source: ArrayBufferView | number, labelOrOptions?: string | StorageBufferOptions): StorageBuffer {
     const options: StorageBufferOptions = typeof labelOrOptions === "string" || labelOrOptions === undefined ? { label: labelOrOptions } : labelOrOptions;
-    const { label, writable = false, vertex = false } = options;
+    const { label, writable = false, vertex = false, index = false } = options;
 
     const requested = typeof source === "number" ? source : source.byteLength;
     const byteLength = align(Math.max(requested, 4), 4);
     // COPY_SRC on writable allocations keeps GPU-produced contents copyable — needed
     // for debugging, capture tooling, and staging into other resources. A compute
     // target you can never read out of is impractical to diagnose.
-    const usage = BU.STORAGE | (vertex ? BU.VERTEX : 0) | (writable ? BU.COPY_SRC : 0);
+    const usage = BU.STORAGE | (vertex ? BU.VERTEX : 0) | (index ? BU.INDEX : 0) | (writable ? BU.COPY_SRC : 0);
 
     // A writable buffer keeps no CPU shadow: the GPU owns its contents.
     const bytes = writable ? null : new Uint8Array(byteLength);
@@ -81,6 +92,7 @@ export function createStorageBuffer(engine: EngineContext, source: ArrayBufferVi
         _label: { value: label },
         _writable: { value: writable },
         _vertex: { value: vertex },
+        _index: { value: index },
     });
     (engine._storageBuffers ??= new Set()).add(storage);
     if (!engine._storageRequiredLimits) {

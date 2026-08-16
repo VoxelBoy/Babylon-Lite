@@ -25,6 +25,27 @@ export function addTask(target: FrameGraph | SceneContext, task: Task): void {
     _appendTask(resolveFg(target), task);
 }
 
+/** Remove a task from execute order. Returns `true` if it was present.
+ *
+ *  The inverse of `addTask`. A frame graph is otherwise append-only, so work
+ *  that should run a bounded number of times — a one-shot bake, a warm-up pass,
+ *  a capture — has no way to retire itself and keeps costing a pass every frame
+ *  for the life of the scene.
+ *
+ *  Removal does not dispose the task; the caller still owns its GPU resources
+ *  and decides whether they outlive the graph (a bake's render target normally
+ *  does — that is the point of running it). Call the task's own `dispose` when
+ *  they should not. */
+export function removeTask(target: FrameGraph | SceneContext, task: Task): boolean {
+    const fg = resolveFg(target);
+    const i = fg._tasks.indexOf(task);
+    if (i < 0) {
+        return false;
+    }
+    fg._tasks.splice(i, 1);
+    return true;
+}
+
 /** Insert a task at the START of user execute order. Built-in system tasks that must
  *  precede all user work, such as the shadow adapter, keep their leading slot. */
 export function addTaskAtStart(target: FrameGraph | SceneContext, task: Task): void {

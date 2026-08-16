@@ -82,6 +82,7 @@ describe("shared index topology", () => {
                     storage: slab,
                     indices: topology,
                     indexCount: INDICES.length,
+                    indexFormat: "uint32",
                     vertexCount: VERTS,
                     arrayStride: STRIDE,
                     baseVertex: i * VERTS,
@@ -103,6 +104,7 @@ describe("shared index topology", () => {
             storage: slab,
             indices: topology,
             indexCount: INDICES.length,
+            indexFormat: "uint32",
             vertexCount: VERTS,
             arrayStride: STRIDE,
         });
@@ -121,7 +123,7 @@ describe("shared index topology", () => {
         const slab = createStorageBuffer(engine, VERTS * STRIDE, { writable: true, vertex: true });
         const notIndices = createStorageBuffer(engine, INDICES);
         expect(() =>
-            createMeshFromStorageBuffer(engine, "chunk", { storage: slab, indices: notIndices, indexCount: 6, vertexCount: VERTS, arrayStride: STRIDE })
+            createMeshFromStorageBuffer(engine, "chunk", { storage: slab, indices: notIndices, indexCount: 6, indexFormat: "uint32", vertexCount: VERTS, arrayStride: STRIDE })
         ).toThrow(/index: true/);
     });
 
@@ -131,6 +133,24 @@ describe("shared index topology", () => {
         const topology = createStorageBuffer(engine, INDICES, { index: true });
         // The allocation's byte length is padded, so it cannot stand in for the
         // draw count — guessing would silently draw the wrong number of indices.
-        expect(() => createMeshFromStorageBuffer(engine, "chunk", { storage: slab, indices: topology, vertexCount: VERTS, arrayStride: STRIDE })).toThrow(/indexCount/);
+        expect(() => createMeshFromStorageBuffer(engine, "chunk", { storage: slab, indices: topology, indexFormat: "uint32", vertexCount: VERTS, arrayStride: STRIDE })).toThrow(/indexCount/);
+    });
+
+    it("requires an explicit indexFormat for a shared allocation", () => {
+        const { engine } = makeEngine();
+        const slab = createStorageBuffer(engine, VERTS * STRIDE, { writable: true, vertex: true });
+        const topology = createStorageBuffer(engine, INDICES, { index: true });
+        // A 16-bit topology declared as 32-bit fails WebGPU validation with a
+        // buffer-size complaint that points at the allocation, not the format.
+        expect(() => createMeshFromStorageBuffer(engine, "chunk", { storage: slab, indices: topology, indexCount: 6, vertexCount: VERTS, arrayStride: STRIDE })).toThrow(/indexFormat/);
+    });
+
+    it("derives the format from a typed array's element size", () => {
+        const { engine } = makeEngine();
+        const slab = createStorageBuffer(engine, VERTS * STRIDE, { writable: true, vertex: true });
+        const wide = createMeshFromStorageBuffer(engine, "wide", { storage: slab, indices: INDICES, vertexCount: VERTS, arrayStride: STRIDE });
+        const narrow = createMeshFromStorageBuffer(engine, "narrow", { storage: slab, indices: new Uint16Array([0, 1, 2]), vertexCount: VERTS, arrayStride: STRIDE });
+        expect(wide._gpu.indexFormat).toBe("uint32");
+        expect(narrow._gpu.indexFormat).toBe("uint16");
     });
 });

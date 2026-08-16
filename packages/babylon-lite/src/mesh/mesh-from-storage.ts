@@ -43,7 +43,12 @@ export interface MeshFromStorageOptions {
      *  per mesh would duplicate the same kilobytes thousands of times. A shared
      *  allocation is NOT freed with the mesh; it outlives the meshes and the caller
      *  disposes it. */
-    readonly indices: Uint32Array | StorageBuffer;
+    readonly indices: Uint16Array | Uint32Array | StorageBuffer;
+    /** Index format. Derived from the typed array's element size when `indices` is one;
+     *  REQUIRED when `indices` is a shared allocation, whose element size is not recoverable
+     *  from the allocation. A 16-bit topology declared as 32-bit fails WebGPU validation with
+     *  a size complaint that points at the buffer rather than at the format. */
+    readonly indexFormat?: GPUIndexFormat;
     /** Number of indices to draw. Required when `indices` is a shared allocation, since
      *  its byte length is padded and need not equal the draw count. Defaults to the
      *  typed array's length. */
@@ -80,15 +85,21 @@ export function createMeshFromStorageBuffer(engine: EngineContext, name: string,
     }
 
     const vertexBuffer = _getStorageBufferHandle(engine, storage);
-    const sharedIndices = !(indices instanceof Uint32Array);
+    const sharedIndices = !ArrayBuffer.isView(indices);
     if (sharedIndices && !(indices as StorageBuffer)._index) {
         throw new Error("createMeshFromStorageBuffer: a StorageBuffer passed as `indices` must be created with { index: true } so it carries GPUBufferUsage.INDEX.");
     }
-    const indexCount = options.indexCount ?? (sharedIndices ? 0 : (indices as Uint32Array).length);
+    const indexCount = options.indexCount ?? (sharedIndices ? 0 : (indices as Uint16Array | Uint32Array).length);
     if (indexCount <= 0) {
         throw new Error("createMeshFromStorageBuffer: `indexCount` is required when `indices` is a shared allocation (its byte length is padded and need not equal the draw count).");
     }
-    const indexBuffer = sharedIndices ? _getStorageBufferHandle(engine, indices as StorageBuffer) : createMappedBuffer(engine, indices as Uint32Array, BU.INDEX, `${name}-indices`);
+    const indexFormat: GPUIndexFormat = options.indexFormat ?? (sharedIndices ? "uint32" : (indices as Uint16Array | Uint32Array).BYTES_PER_ELEMENT === 2 ? "uint16" : "uint32");
+    if (sharedIndices && !options.indexFormat) {
+        throw new Error("createMeshFromStorageBuffer: `indexFormat` is required when `indices` is a shared allocation — its element size cannot be recovered from the allocation.");
+    }
+    const indexBuffer = sharedIndices
+        ? _getStorageBufferHandle(engine, indices as StorageBuffer)
+        : createMappedBuffer(engine, indices as Uint16Array | Uint32Array, BU.INDEX, `${name}-indices`);
 
     const mesh = initMeshTransform({
         name,
@@ -104,7 +115,7 @@ export function createMeshFromStorageBuffer(engine: EngineContext, name: string,
             uvBuffer: vertexBuffer,
             indexBuffer,
             indexCount,
-            indexFormat: "uint32",
+            indexFormat,
             _baseVertex: baseVertex,
             // The slab belongs to whoever created it and is shared with every other
             // mesh holding a slot; this mesh only borrows it.

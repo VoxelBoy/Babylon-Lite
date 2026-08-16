@@ -233,7 +233,9 @@ export type { MeshFromStorageOptions } from "./mesh/mesh-from-storage.js";
 // User-facing compute. Lite runs compute internally (mipmaps, culling, IBL); this
 // is the supported way for a caller to run their own — e.g. to produce geometry.
 export { createComputeShader, prepareComputeShader, setComputeUniform, setComputeStorageBuffer, dispatchCompute, disposeComputeShader } from "./compute/compute-shader.js";
-export type { ComputeShader, ComputeShaderOptions, ComputeUniformDecl, ComputeStorageBufferDecl } from "./compute/compute-shader.js";
+// Many binding sets per program, and one submission for a whole batch of dispatches.
+export { createComputeBindings, setComputeBindingsStorageBuffer, disposeComputeBindings, dispatchComputeBatch } from "./compute/compute-shader.js";
+export type { ComputeShader, ComputeShaderOptions, ComputeUniformDecl, ComputeStorageBufferDecl, ComputeBindings, ComputeDispatch } from "./compute/compute-shader.js";
 export type { StorageBuffer } from "./resource/storage-buffer.js";
 
 // ─── Textures ────────────────────────────────────────────────────────

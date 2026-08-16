@@ -223,6 +223,11 @@ export type { Csg2Solid } from "./mesh/csg2.js";
 
 // ─── Resources ───────────────────────────────────────────────────────
 export { createStorageBuffer, updateStorageBuffer, disposeStorageBuffer } from "./resource/storage-buffer.js";
+export type { StorageBufferOptions } from "./resource/storage-buffer.js";
+// GPU-resident geometry: a compute pass fills a storage allocation and the draw
+// reads it in place (no readback, no copy). Tree-shaken away when unused.
+export { createMeshFromStorageBuffer } from "./mesh/mesh-from-storage.js";
+export type { MeshFromStorageOptions } from "./mesh/mesh-from-storage.js";
 export type { StorageBuffer } from "./resource/storage-buffer.js";
 
 // ─── Textures ────────────────────────────────────────────────────────
@@ -532,6 +537,8 @@ export type {
     ShaderDefineValue,
     ShaderDefineMap,
     ShaderDefine,
+    ShaderVertexLayout,
+    ShaderVertexAttrLayout,
 } from "./material/shader/shader-material.js";
 export type {
     PbrMaterialProps,

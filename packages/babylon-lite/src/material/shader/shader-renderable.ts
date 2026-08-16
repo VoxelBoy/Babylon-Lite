@@ -407,7 +407,13 @@ function drawPacket(pass: ShaderRenderPass, engine: EngineContext, material: Sha
     }
     pass.setIndexBuffer(gpu.indexBuffer, gpu.indexFormat);
     pass.setBindGroup(1, packet._bindGroup);
-    pass.drawIndexed(gpu.indexCount);
+    // `_baseVertex` addresses this mesh's slot inside a shared vertex allocation.
+    // Omitted entirely for canonical meshes so the hot path stays byte-identical.
+    if (gpu._baseVertex) {
+        pass.drawIndexed(gpu.indexCount, 1, 0, gpu._baseVertex);
+    } else {
+        pass.drawIndexed(gpu.indexCount);
+    }
 }
 
 function ensureCustomUbo(engine: EngineContext, material: ShaderMaterial, customSpec: UboSpec | null): void {

@@ -64,6 +64,10 @@ export interface MeshGPU {
     readonly indexBuffer: GPUBuffer;
     readonly indexCount: number;
     readonly indexFormat: GPUIndexFormat;
+    /** @internal First vertex of this mesh within a shared vertex allocation, applied as the
+     *  draw call's `baseVertex`. Lets many meshes take slots in one GPU-resident slab without
+     *  a non-zero `setVertexBuffer` bind offset. Undefined/0 → canonical behaviour. */
+    readonly _baseVertex?: number;
     /** @internal Reserved vertex capacity for grow-only procedural geometry. */
     _vertexCapacity?: number;
     /** @internal Reserved index capacity for grow-only procedural geometry. */

@@ -19,13 +19,21 @@ export function disposeMeshGpu(mesh: Mesh): void {
     mesh._disposed = true;
     const g = mesh._gpu;
     if (release(g)) {
-        g.positionBuffer.destroy();
-        g.normalBuffer.destroy();
-        g.uvBuffer.destroy();
-        g.indexBuffer.destroy();
-        g.tangentBuffer?.destroy();
-        g.uv2Buffer?.destroy();
-        g.colorBuffer?.destroy();
+        // Buffers may be BORROWED rather than owned. A mesh whose vertices live in a
+        // shared GPU-resident slab points every vertex-side field at that one
+        // allocation, so destroying them here would tear the slab out from under every
+        // other mesh holding a slot in it — and the same for a shared index topology.
+        if (g._ownsVertexBuffers !== false) {
+            g.positionBuffer.destroy();
+            g.normalBuffer.destroy();
+            g.uvBuffer.destroy();
+            g.tangentBuffer?.destroy();
+            g.uv2Buffer?.destroy();
+            g.colorBuffer?.destroy();
+        }
+        if (g._ownsIndexBuffer !== false) {
+            g.indexBuffer.destroy();
+        }
     }
     const ti = mesh.thinInstances;
     if (ti && release(ti)) {

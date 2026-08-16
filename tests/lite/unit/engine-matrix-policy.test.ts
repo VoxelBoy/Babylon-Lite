@@ -102,9 +102,9 @@ describe("matrix allocator (process-global singleton)", () => {
         const FAR = 4_637_862;
         const node = createTransformNode("farNode", FAR, 0, 0);
 
-        const before = node.worldMatrix[12];
+        const before = node.worldMatrix[12]!;
         node.position.set(FAR + 0.01, 0, 0);
-        const after = node.worldMatrix[12];
+        const after = node.worldMatrix[12]!;
 
         expect(after).not.toBe(before);
         expect(after - before).toBeCloseTo(0.01, 6);

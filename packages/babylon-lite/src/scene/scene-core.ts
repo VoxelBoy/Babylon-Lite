@@ -242,27 +242,6 @@ export interface SceneContext extends RenderingContext {
 /** Options passed to the scene-context factory. */
 export interface SceneContextOptions {
     defaultRenderTask?: boolean;
-    /**
-     * Depth/stencil format for the default render task. Defaults to
-     * `"depth24plus-stencil8"`.
-     *
-     * Set `"depth32float"` for scenes with a large near:far ratio. Lite is
-     * reverse-Z (depth clears to 0, compares `greater-equal`), and reverse-Z's
-     * precision advantage comes from pairing it with a FLOATING-POINT depth
-     * buffer: on a 24-bit integer buffer the quantization is uniform in
-     * reversed-depth space, which still concentrates precision near the camera,
-     * whereas a float32 buffer's exponent tracks the reversed value and keeps
-     * relative precision roughly constant across the whole range.
-     *
-     * The difference is not marginal at extreme ranges. For near 0.5 and far
-     * 1.5e7 the smallest resolvable separation at 1,000 units of distance is
-     * ~119 km on `depth24plus-stencil8` and ~11 cm on `depth32float`.
-     *
-     * `"depth32float"` carries no stencil, so scenes that need stencil want
-     * `"depth32float-stencil8"` instead — which is an OPTIONAL WebGPU feature
-     * and not available everywhere, unlike plain `depth32float`.
-     */
-    depthFormat?: GPUTextureFormat;
 }
 
 /** Create an empty scene context bound to the given `surface`. The default render task
@@ -354,11 +333,10 @@ export function createSceneContext(surface: SurfaceContext, options?: SceneConte
         // scRT with a task-owned single-sample depth buffer it builds/clears/frees.
         // All three reads (format / msaaSamples / scRT) come from the bound `surface`.
         const msaa = surface.msaaSamples > 1;
-        const dFormat = options?.depthFormat ?? "depth24plus-stencil8";
         const rt = msaa
-            ? createRenderTarget({ lbl: "scene-color", format: surface.format, dFormat, samples: surface.msaaSamples, size: surface })
+            ? createRenderTarget({ lbl: "scene-color", format: surface.format, dFormat: "depth24plus-stencil8", samples: surface.msaaSamples, size: surface })
             : surface.scRT;
-        const depth = msaa ? undefined : createRenderTarget({ lbl: "scene-depth", dFormat, samples: 1, size: surface });
+        const depth = msaa ? undefined : createRenderTarget({ lbl: "scene-depth", dFormat: "depth24plus-stencil8", samples: 1, size: surface });
         _appendTask(fg, createRenderTask({ name: "scene", rt, rst: msaa ? surface.scRT : undefined, depth }, eng, ctx));
     }
     ctx._disposables.push(() => fg.dispose());

@@ -11,6 +11,7 @@
  */
 
 import { TU } from "./gpu-flags.js";
+import { mipLevelCount } from "../texture/mip-count.js";
 import type { EngineContext } from "./engine.js";
 import type { SurfaceContext } from "./surface.js";
 import type { Texture2D } from "../texture/texture-2d.js";
@@ -47,6 +48,13 @@ export interface RenderTargetDescriptor {
     _depthCompare?: GPUCompareFunction;
     /** MSAA sample count: `1` = single-sample (no multisampling), `4` = 4x MSAA. */
     samples: number;
+    /** Allocate a full mip chain on the color attachment instead of a single level.
+     *  The render pass still targets mip 0; the remaining levels are filled on demand
+     *  by `generateTextureMipmaps`. Required for any offscreen target that will later
+     *  be minified — an unmipped target sampled below 1:1 aliases. Incompatible with
+     *  `samples > 1` (WebGPU forbids multisampled textures with more than one mip).
+     *  Defaults to a single level. */
+    mips?: boolean;
     /** A `SurfaceContext` to size to that surface's swapchain (re-resolved each
      *  `buildRenderTarget`), or explicit `{ width, height }` in device pixels. Pass a
      *  surface for canvas-sized RTs; the RT then tracks that specific surface in
@@ -120,14 +128,22 @@ export function buildRenderTarget(rt: RenderTarget, engine: EngineContext): void
     const allocColor = !!desc.format;
 
     if (allocColor) {
+        if (desc.mips && desc.samples > 1) {
+            throw new Error(`buildRenderTarget: mips and samples ${desc.samples} are mutually exclusive (WebGPU multisampled textures are single-level).`);
+        }
+        const mipCount = desc.mips ? mipLevelCount(width, height) : 1;
         rt._colorTexture = device.createTexture({
             label: desc.lbl,
             size: { width, height },
             format: desc.format!,
             sampleCount: desc.samples,
+            mipLevelCount: mipCount,
             usage: TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING | TU.COPY_SRC,
         });
-        rt._colorView = rt._colorTexture.createView();
+        // A render-pass attachment must name exactly one mip level, so a mipped
+        // target's attachment view is level 0 only. The full-chain view for
+        // sampling is built by whoever exposes the texture (see texture/rtt.ts).
+        rt._colorView = mipCount > 1 ? rt._colorTexture.createView({ baseMipLevel: 0, mipLevelCount: 1 }) : rt._colorTexture.createView();
     }
 
     if (desc.dFormat) {

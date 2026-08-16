@@ -8,6 +8,7 @@
 import { SS } from "../engine/gpu-flags.js";
 import type { EngineContext } from "../engine/engine.js";
 import { getBilinearSampler } from "../resource/samplers.js";
+import type { Texture2D } from "./texture-2d.js";
 
 const BLIT_SHADER = `@group(0)@binding(0)var t:texture_2d<f32>;@group(0)@binding(1)var s:sampler;
 struct V{@builtin(position)p:vec4f,@location(0)u:vec2f};
@@ -95,4 +96,24 @@ export function recordMipmaps(engine: EngineContext, texture: GPUTexture, encode
         pass.draw(3);
         pass.end();
     }
+}
+
+/**
+ * Fill levels 1..N of a `Texture2D`'s mip chain from level 0.
+ *
+ * The public counterpart to the internal `generateMipmaps`: it takes the
+ * `Texture2D` handle rather than a `GPUTexture`, so callers never touch a raw
+ * GPU object. Use it after rendering into a `createRenderTargetTexture` target
+ * allocated with `mips: true`, or after updating level 0 of any mipped texture.
+ *
+ * Throws rather than no-ops when the texture has a single level. A caller
+ * reaching this function has asked for mips explicitly; silently doing nothing
+ * would leave the texture aliasing under minification with nothing to show for
+ * it, which is the failure mode this exists to prevent.
+ */
+export function generateTextureMipmaps(engine: EngineContext, texture: Texture2D): void {
+    if (texture.texture.mipLevelCount <= 1) {
+        throw new Error("generateTextureMipmaps: texture has a single mip level — allocate it with mips (e.g. RenderTargetDescriptor.mips: true) before generating.");
+    }
+    generateMipmaps(engine, texture.texture);
 }

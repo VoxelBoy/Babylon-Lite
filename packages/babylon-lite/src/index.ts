@@ -63,7 +63,7 @@ export { setSubtreeVisible } from "./scene/visibility.js";
 export { getFrameGraph } from "./scene/scene.js";
 export type { FrameGraph } from "./frame-graph/frame-graph.js";
 export { buildFrameGraphTask } from "./frame-graph/frame-graph.js";
-export { addRenderPass, addTask, addTaskAtStart, addTaskBefore, addTaskAfter } from "./frame-graph/frame-graph-actions.js";
+export { addRenderPass, addTask, addTaskAtStart, addTaskBefore, addTaskAfter, removeTask } from "./frame-graph/frame-graph-actions.js";
 export { createFrameGraphContext, registerFrameGraphContext, unregisterFrameGraphContext, disposeFrameGraphContext } from "./frame-graph/frame-graph-context.js";
 export type { FrameGraphContext, FrameGraphContextOptions } from "./frame-graph/frame-graph-context.js";
 export type { Task } from "./frame-graph/task.js";
@@ -88,6 +88,10 @@ export type { ShadowTask } from "./frame-graph/shadow-task.js";
 export type { RenderTarget, RenderTargetDescriptor } from "./engine/render-target.js";
 export { createRenderTarget } from "./engine/render-target.js";
 export { createRenderTargetTexture } from "./texture/rtt.js";
+export type { RenderTargetTextureSampling } from "./texture/rtt.js";
+// Fills mip levels 1..N from level 0 for any mipped Texture2D (e.g. a render
+// target allocated with `mips: true`).
+export { generateTextureMipmaps } from "./texture/generate-mipmaps.js";
 // Pooled GPU samplers (same descriptor → same GPUSampler). Public so consumers building their own
 // sampled-texture wrappers around managed render targets don't have to reach into `engine._device`.
 export { getOrCreateSampler, clearSamplerCache } from "./resource/gpu-pool.js";

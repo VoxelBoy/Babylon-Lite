@@ -32,8 +32,6 @@ import type { DiscOptions } from "./create-disc.js";
 import { createPolyhedronData } from "./create-polyhedron.js";
 import type { PolyhedronOptions } from "./create-polyhedron.js";
 import { createRibbonData } from "./create-ribbon.js";
-import type { LatheOptions } from "./create-lathe.js";
-import { createLatheData } from "./create-lathe.js";
 import type { RibbonOptions } from "./create-ribbon.js";
 import { createTubeData } from "./create-tube.js";
 import type { TubeOptions } from "./create-tube.js";
@@ -524,12 +522,6 @@ export function createPolyhedron(engine: EngineContext, options?: PolyhedronOpti
 export function createRibbon(engine: EngineContext, options: RibbonOptions): Mesh {
     const data = createRibbonData(options);
     return createMeshFromData(engine as EngineContext, "ribbon", data.positions, data.normals, data.indices, data.uvs);
-}
-
-/** Create a surface of revolution from a profile. Caller must assign material. */
-export function createLathe(engine: EngineContext, options: LatheOptions): Mesh {
-    const data = createLatheData(options);
-    return createMeshFromData(engine as EngineContext, "lathe", data.positions, data.normals, data.indices, data.uvs);
 }
 
 /** Create a tube (circular cross-section swept along a path). Caller must assign material. */

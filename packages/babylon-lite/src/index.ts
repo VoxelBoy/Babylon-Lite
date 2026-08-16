@@ -185,7 +185,6 @@ export {
     createGround,
     createGroundFromHeightMap,
     createCylinder,
-    createLathe,
     createCapsule,
     createPlane,
     createDisc,
@@ -216,8 +215,6 @@ export type { BoxData } from "./mesh/create-box.js";
 export { createSphereData } from "./mesh/create-sphere.js";
 export type { SphereMeshData } from "./mesh/create-sphere.js";
 export { createCylinderData } from "./mesh/create-cylinder.js";
-export { createLatheData } from "./mesh/create-lathe.js";
-export type { LatheOptions } from "./mesh/create-lathe.js";
 export { createCapsuleData } from "./mesh/create-capsule.js";
 export type { CylinderData } from "./mesh/create-cylinder.js";
 export type { CapsuleData } from "./mesh/create-capsule.js";

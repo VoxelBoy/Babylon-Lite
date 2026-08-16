@@ -6,7 +6,7 @@ import { getSceneBindGroupLayout } from "../../render/scene-helpers.js";
 import { SCENE_UBO_WGSL } from "../../shader/scene-uniforms.js";
 import { computeUboLayout } from "../../shader/ubo-layout.js";
 import type { UboField, UboSpec } from "../../shader/fragment-types.js";
-import type { ShaderAttributeName, ShaderMaterial, ShaderSamplerDecl, ShaderUniformDecl } from "./shader-material.js";
+import type { ShaderAttributeName, ShaderMaterial, ShaderSamplerDecl, ShaderStorageBufferDecl, ShaderUniformDecl } from "./shader-material.js";
 import { _isShaderSystemUniform } from "./shader-material.js";
 import type { ResolvedStencil } from "../stencil-state.js";
 import type { StencilState } from "../material.js";
@@ -83,7 +83,7 @@ export function getOrCreateShaderPipelineBindings(engine: EngineContext, materia
             group1BGL,
             systemSpec,
             customSpec,
-            vertexBuffers: material.attributes.map(attributeLayout),
+            vertexBuffers: material.attributes.map((name, i) => attributeLayoutFor(material, name, i)),
             pipelines: new Map(),
             _pipelineLayout: engine._device.createPipelineLayout({ bindGroupLayouts: [getSceneBindGroupLayout(engine), group1BGL] }),
         };
@@ -215,7 +215,7 @@ function toUboField(decl: ShaderUniformDecl): UboField {
 
 function buildBindGroupLayoutEntries(
     samplers: readonly ShaderSamplerDecl[],
-    storageBuffers: readonly { name: string; type: string }[],
+    storageBuffers: readonly ShaderStorageBufferDecl[],
     hasCustomUbo: boolean
 ): GPUBindGroupLayoutEntry[] {
     // Local (not module-level): reading the WebGPU flag globals must be deferred until
@@ -243,14 +243,29 @@ function buildBindGroupLayoutEntries(
             sampler: { type: sampler.comparison === true ? "comparison" : sampleType === "float" ? "filtering" : "non-filtering" },
         });
     }
-    for (const _storage of storageBuffers) {
+    for (const storage of storageBuffers) {
         entries.push({
             binding: nextBinding++,
             visibility: SHADER_STAGE_ALL,
-            buffer: { type: "read-only-storage" },
+            buffer: { type: storage.writable ? "storage" : "read-only-storage" },
         });
     }
     return entries;
+}
+
+/** Build one attribute's vertex-buffer layout, honouring a caller override when present.
+ *  An override lets several attributes share one interleaved allocation (custom
+ *  `arrayStride`/`offset`) and carry a non-canonical `format` — e.g. a `float32x4`
+ *  position whose `.w` packs extra per-vertex data. */
+function attributeLayoutFor(material: ShaderMaterial, name: ShaderAttributeName, shaderLocation: number): GPUVertexBufferLayout {
+    const override = material.vertexLayout?.[name];
+    if (override) {
+        return {
+            arrayStride: override.arrayStride,
+            attributes: [{ shaderLocation, offset: override.offset ?? 0, format: override.format }],
+        };
+    }
+    return attributeLayout(name, shaderLocation);
 }
 
 function attributeLayout(name: ShaderAttributeName, shaderLocation: number): GPUVertexBufferLayout {
@@ -297,7 +312,7 @@ ${customSpec._structBody}
 `;
     }
     for (const storage of material.storageBufferDecls) {
-        wgsl += `@group(1) @binding(${nextBinding++}) var<storage, read> ${storage.name}: ${storage.type};
+        wgsl += `@group(1) @binding(${nextBinding++}) var<storage, ${storage.writable ? "read_write" : "read"}> ${storage.name}: ${storage.type};
 `;
     }
     for (const define of material.defines) {
@@ -308,7 +323,7 @@ ${customSpec._structBody}
 `;
     for (let i = 0; i < material.attributes.length; i++) {
         const attr = material.attributes[i]!;
-        wgsl += `@location(${i}) ${attr}: ${attributeWgslType(attr)},
+        wgsl += `@location(${i}) ${attr}: ${attributeWgslTypeFor(material, attr)},
 `;
     }
     wgsl += instanceAttrs;
@@ -325,6 +340,28 @@ function formatDefineValue(value: boolean | number): string {
         return `${value}.0`;
     }
     return String(value);
+}
+
+/** WGSL type for a vertex format, so an overridden layout and the generated
+ *  `VertexInput` struct always agree. Declaring `position` as `vec3<f32>` while the
+ *  pipeline feeds `float32x4` is a shader-compile error, not a silent mismatch. */
+function wgslTypeForFormat(format: GPUVertexFormat): string {
+    if (format.startsWith("uint32")) {
+        return format === "uint32" ? "u32" : `vec${format.slice(-1)}<u32>`;
+    }
+    if (format.startsWith("sint32")) {
+        return format === "sint32" ? "i32" : `vec${format.slice(-1)}<i32>`;
+    }
+    if (format.startsWith("float32")) {
+        return format === "float32" ? "f32" : `vec${format.slice(-1)}<f32>`;
+    }
+    // Normalized/packed formats all expand to f32 vectors in WGSL.
+    return "vec4<f32>";
+}
+
+function attributeWgslTypeFor(material: ShaderMaterial, name: ShaderAttributeName): string {
+    const override = material.vertexLayout?.[name];
+    return override ? wgslTypeForFormat(override.format) : attributeWgslType(name);
 }
 
 function attributeWgslType(name: ShaderAttributeName): string {

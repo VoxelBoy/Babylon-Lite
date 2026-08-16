@@ -21,8 +21,21 @@ export type ShaderUniformOption = ShaderSystemUniformName | ShaderUniformDecl;
 export type ShaderUniformValue = number | readonly number[] | Float32Array;
 /** A sampler entry: either a bare sampler name or an explicit declaration. */
 export type ShaderSamplerOption = string | ShaderSamplerDecl;
-/** A storage-buffer entry: a read-only WGSL storage binding declaration. */
+/** A storage-buffer entry: a WGSL storage binding declaration. */
 export type ShaderStorageBufferOption = ShaderStorageBufferDecl;
+
+/** Vertex layout for one attribute when overriding the canonical packing. */
+export interface ShaderVertexAttrLayout {
+    /** WebGPU vertex format, e.g. `"float32x4"` to carry data in `position.w`. */
+    readonly format: GPUVertexFormat;
+    /** Byte stride between consecutive vertices in the backing allocation. */
+    readonly arrayStride: number;
+    /** Byte offset of this attribute inside one vertex. Default 0. */
+    readonly offset?: number;
+}
+
+/** Per-attribute vertex layout overrides. Omitted attributes keep the canonical layout. */
+export type ShaderVertexLayout = Partial<Record<ShaderAttributeName, ShaderVertexAttrLayout>>;
 /** Value of a WGSL preprocessor define — boolean toggle or numeric constant. */
 export type ShaderDefineValue = boolean | number;
 /** Map of WGSL preprocessor define names to their values. */
@@ -35,6 +48,17 @@ export interface ShaderMaterialOptions {
     readonly vertexSource: string;
     readonly fragmentSource: string;
     readonly attributes: readonly ShaderAttributeName[];
+    /** Override the canonical per-attribute vertex layout.
+     *
+     *  Lite's default gives every attribute its own tightly-packed buffer at a fixed
+     *  format (`position`/`normal` → `float32x3`, `uv` → `float32x2`, …). Supplying a
+     *  layout lets one shared allocation back several attributes — an interleaved slab
+     *  with a caller-chosen `arrayStride`, per-attribute `offset`, and `format`. That is
+     *  what makes GPU-produced geometry practical: a compute pass fills one buffer and
+     *  the draw reads it in place, with no readback and no de-interleaving copy.
+     *
+     *  Attributes omitted here keep the canonical layout. */
+    readonly vertexLayout?: ShaderVertexLayout;
     readonly uniforms?: readonly ShaderUniformOption[];
     readonly samplers?: readonly ShaderSamplerOption[];
     readonly storageBuffers?: readonly ShaderStorageBufferOption[];
@@ -102,6 +126,10 @@ export interface ShaderSamplerDecl {
 export interface ShaderStorageBufferDecl {
     readonly name: string;
     readonly type: string;
+    /** Bind as `var<storage, read_write>` instead of the default `read`. The bound
+     *  allocation must have been created with `writable: true`. Read-only remains the
+     *  default because it is the cheaper binding and the common case. */
+    readonly writable?: boolean;
 }
 
 /** A resolved WGSL preprocessor define (name + value). */
@@ -140,6 +168,8 @@ export interface ShaderMaterial extends Material {
     readonly vertexSource: string;
     readonly fragmentSource: string;
     readonly attributes: readonly ShaderAttributeName[];
+    /** Per-attribute vertex layout overrides (see `ShaderMaterialOptions.vertexLayout`). */
+    readonly vertexLayout?: ShaderVertexLayout;
     readonly uniformDecls: readonly ShaderUniformDecl[];
     readonly samplerDecls: readonly ShaderSamplerDecl[];
     readonly storageBufferDecls: readonly ShaderStorageBufferDecl[];
@@ -318,6 +348,7 @@ export function createShaderMaterial(options: ShaderMaterialOptions): ShaderMate
         vertexSource: options.vertexSource,
         fragmentSource: options.fragmentSource,
         attributes,
+        ...(options.vertexLayout ? { vertexLayout: options.vertexLayout } : {}),
         uniformDecls,
         samplerDecls,
         storageBufferDecls,

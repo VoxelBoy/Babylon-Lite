@@ -327,6 +327,12 @@ ${customSpec._structBody}
 `;
     }
     wgsl += instanceAttrs;
+    if (material._drawIndex) {
+        // A builtin, not a location, so it consumes no vertex-buffer slot and
+        // costs nothing when the shader ignores it.
+        wgsl += `@builtin(instance_index) drawIndex: u32,
+`;
+    }
     wgsl += `};
 `;
     return wgsl;

@@ -59,6 +59,21 @@ export interface ShaderMaterialOptions {
      *
      *  Attributes omitted here keep the canonical layout. */
     readonly vertexLayout?: ShaderVertexLayout;
+    /** Expose the draw's index to the vertex shader as `input.drawIndex : u32`
+     *  (WGSL `@builtin(instance_index)`).
+     *
+     *  This is the per-DRAW seam. Everything else a ShaderMaterial can bind is
+     *  per-MATERIAL: a uniform written before the frame is the same value for
+     *  every mesh the material draws. Without this, a value that varies per mesh
+     *  forces one material per mesh, which is workable for a handful and not for
+     *  thousands — each carries its own UBO, bind group and pipeline lookup.
+     *  With it, one material binds a storage buffer of per-object records and
+     *  each draw reads its own row.
+     *
+     *  The value comes from `Mesh.drawIndex` for a plain mesh. For a
+     *  thin-instance draw it is the instance number, as WebGPU defines it, and
+     *  `Mesh.drawIndex` does not apply. */
+    readonly drawIndex?: boolean;
     readonly uniforms?: readonly ShaderUniformOption[];
     readonly samplers?: readonly ShaderSamplerOption[];
     readonly storageBuffers?: readonly ShaderStorageBufferOption[];
@@ -170,6 +185,8 @@ export interface ShaderMaterial extends Material {
     readonly attributes: readonly ShaderAttributeName[];
     /** Per-attribute vertex layout overrides (see `ShaderMaterialOptions.vertexLayout`). */
     readonly vertexLayout?: ShaderVertexLayout;
+    /** @internal Emit `@builtin(instance_index) drawIndex` in `VertexInput` (see `ShaderMaterialOptions.drawIndex`). */
+    readonly _drawIndex?: boolean;
     readonly uniformDecls: readonly ShaderUniformDecl[];
     readonly samplerDecls: readonly ShaderSamplerDecl[];
     readonly storageBufferDecls: readonly ShaderStorageBufferDecl[];
@@ -349,6 +366,7 @@ export function createShaderMaterial(options: ShaderMaterialOptions): ShaderMate
         fragmentSource: options.fragmentSource,
         attributes,
         ...(options.vertexLayout ? { vertexLayout: options.vertexLayout } : {}),
+        ...(options.drawIndex ? { _drawIndex: true } : {}),
         uniformDecls,
         samplerDecls,
         storageBufferDecls,

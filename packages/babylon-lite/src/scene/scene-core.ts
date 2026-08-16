@@ -407,8 +407,17 @@ export function addToScene(scene: SceneContext, entity: Mesh | LightBase | Camer
         // Register BEFORE mutating scene state: registering a disposed mesh throws, and the
         // scene must be left untouched when it does.
         registerMeshScene(ctx, mesh);
+        // The build group is chosen from the material HERE, once. A mesh added
+        // without one is registered, counted, and never drawn — and assigning a
+        // material afterwards does not rescue it, because the grouping decision
+        // has already been made. That failure is completely silent: the scene
+        // reports the mesh, the frame reports no error, and nothing appears. Say
+        // it instead.
+        if (!mesh.material) {
+            throw new Error(`addToScene: mesh "${mesh.name ?? "(unnamed)"}" has no material. Assign one before adding it — the render group is resolved from the material at add time, so a material set afterwards never takes effect.`);
+        }
         ctx.meshes.push(mesh);
-        const build = mesh.material ? (mesh.material as unknown as { _buildGroup?: MeshGroupBuilder })._buildGroup : undefined;
+        const build = (mesh.material as unknown as { _buildGroup?: MeshGroupBuilder })._buildGroup;
         if (build) {
             let group = ctx._groups.get(build);
             if (!group) {

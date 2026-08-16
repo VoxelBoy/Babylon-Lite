@@ -40,6 +40,9 @@ function drainRetirements(...scenes: SceneContext[]): void {
     }
 }
 
+/** A material with no build group: the mesh joins no render group, exactly as before. */
+const inertMaterial = (): never => ({}) as never;
+
 describe("removeFromScene symmetry", () => {
     it("removes a light, clears its shadow generator, queues its teardown and detaches parent", () => {
         const scene = fakeScene();
@@ -109,12 +112,35 @@ describe("removeFromScene symmetry", () => {
         expect(scene._beforeRender).toHaveLength(0);
     });
 
+    it("rejects a mesh with no material instead of silently never drawing it", () => {
+        const scene = fakeScene();
+        const mesh = {
+            material: null,
+            name: "materialless",
+            children: [],
+            parent: null,
+            thinInstances: null,
+            skeleton: null,
+            vat: null,
+            morphTargets: null,
+            _gpu: {},
+        } as never;
+        // The render group is resolved from the material at add time, so a
+        // material assigned afterwards never takes effect and the mesh is
+        // registered, counted, and invisible — with no error anywhere.
+        expect(() => addToScene(scene, mesh)).toThrow(/has no material/);
+        expect(scene.meshes).toHaveLength(0);
+    });
+
     it("evicts task-local mesh bindings before destroying the mesh GPU", () => {
         const scene = fakeScene();
         let destroyed = false;
         const buffer = () => ({ destroy: () => undefined });
         const mesh = {
-            material: null,
+            // Inert material: these cases exercise scene/GPU lifecycle, not
+            // rendering, but `addToScene` resolves the render group from the
+            // material at add time and rejects a mesh without one.
+            material: inertMaterial(),
             children: [],
             parent: null,
             thinInstances: null,
@@ -187,7 +213,10 @@ describe("removeFromScene symmetry", () => {
                 uv2Buffer: null,
                 colorBuffer: null,
             },
-            material: null,
+            // Inert material: these cases exercise scene/GPU lifecycle, not
+            // rendering, but `addToScene` resolves the render group from the
+            // material at add time and rejects a mesh without one.
+            material: inertMaterial(),
             children: [],
             parent: null,
         } as unknown as Mesh;
@@ -218,7 +247,10 @@ describe("removeFromScene symmetry", () => {
                 uv2Buffer: null,
                 colorBuffer: null,
             },
-            material: null,
+            // Inert material: these cases exercise scene/GPU lifecycle, not
+            // rendering, but `addToScene` resolves the render group from the
+            // material at add time and rejects a mesh without one.
+            material: inertMaterial(),
             children: [],
             parent: null,
         } as unknown as Mesh;
@@ -248,7 +280,10 @@ describe("removeFromScene symmetry", () => {
         const source = {
             name: "source",
             _gpu: gpu,
-            material: null,
+            // Inert material: these cases exercise scene/GPU lifecycle, not
+            // rendering, but `addToScene` resolves the render group from the
+            // material at add time and rejects a mesh without one.
+            material: inertMaterial(),
             children: [],
             parent: null,
             position: new ObservableVec3(0, 0, 0, () => {}),
@@ -289,7 +324,10 @@ describe("removeFromScene symmetry", () => {
         const source = {
             name: "source",
             _gpu: gpu,
-            material: null,
+            // Inert material: these cases exercise scene/GPU lifecycle, not
+            // rendering, but `addToScene` resolves the render group from the
+            // material at add time and rejects a mesh without one.
+            material: inertMaterial(),
             children: [],
             parent: null,
             position: new ObservableVec3(0, 0, 0, () => {}),
@@ -329,7 +367,10 @@ describe("removeFromScene symmetry", () => {
         const mesh = {
             name: "skinned",
             _gpu: gpu,
-            material: null,
+            // Inert material: these cases exercise scene/GPU lifecycle, not
+            // rendering, but `addToScene` resolves the render group from the
+            // material at add time and rejects a mesh without one.
+            material: inertMaterial(),
             children: [],
             parent: null,
             // Per-node skeleton: not shared, so it dies with this mesh.
@@ -360,7 +401,10 @@ describe("removeFromScene symmetry", () => {
                 uv2Buffer: null,
                 colorBuffer: null,
             },
-            material: null,
+            // Inert material: these cases exercise scene/GPU lifecycle, not
+            // rendering, but `addToScene` resolves the render group from the
+            // material at add time and rejects a mesh without one.
+            material: inertMaterial(),
             children: [],
             parent: null,
         } as unknown as Mesh;

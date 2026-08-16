@@ -3,30 +3,44 @@
  *
  * A user-facing compute seam. Lite already runs compute internally (mipmap
  * generation, BRDF decode, thin-instance culling, HDR/IBL), but never exposed a
- * way for callers to run their own — so GPU-generated data, and in particular
- * GPU-generated geometry, had no supported path.
+ * way for callers to run their own, so GPU-generated data, and GPU-generated
+ * geometry in particular, had no supported path.
  *
  * Shape follows `createShaderMaterial`: the caller supplies WGSL plus declared
- * uniforms and storage buffers, and the object owns its bind-group layout,
- * pipeline, and uniform buffer. Nothing here leaks a raw WebGPU handle — storage
- * is bound as an opaque `StorageBuffer`, satisfying the "no GPU internals in the
- * public API" pillar.
+ * uniforms and storage bindings, and the object owns its bind-group layout,
+ * pipeline, and uniform buffer. Nothing here leaks a raw WebGPU handle, since
+ * storage is bound as an opaque `StorageBuffer`, so the "no GPU internals in the
+ * public API" pillar holds.
  *
  * Zero cost when unused: no core render path imports this module.
  *
+ * Uniforms are for values constant across a dispatch. PER-ITEM parameters belong
+ * in a read-only storage buffer that the shader indexes by invocation id, which
+ * is how ONE dispatch covers many items:
+ *
+ *     struct ChunkParams { slotBase: u32, u0: f32, v0: f32, span: f32 };
+ *     @group(0) @binding(1) var<storage, read> params: array<ChunkParams>;
+ *     let chunk = gid.x / vertsPerChunk;
+ *     let p = params[chunk];
+ *
+ * That scales past a uniform buffer's binding-size limit, keeps GPU occupancy
+ * high, and removes any need for per-dispatch uniform juggling. An earlier
+ * revision let callers re-set uniforms between batched dispatches instead; it
+ * silently produced wrong results, because `queue.writeBuffer` is ordered
+ * against submission rather than recording, so every dispatch in a batch
+ * observed the last values written.
+ *
  * Ordering: WebGPU queue submission is ordered, so a dispatch submitted before a
- * frame's draws is visible to those draws. `dispatchCompute` submits immediately
- * by default — the safe behaviour. Wrap several dispatches in
- * `beginComputeBatch`/`endComputeBatch` to record them into ONE encoder and pay a
- * single submit, which is what a chunked terrain filler wants.
+ * frame's draws is visible to those draws.
  */
 import type { EngineContext } from "../engine/engine.js";
 import { computeUboLayout } from "../shader/ubo-layout.js";
 import type { UboSpec } from "../shader/fragment-types.js";
+import { createEmptyUniformBuffer } from "../resource/gpu-buffers.js";
 import { _getStorageBufferHandle, type StorageBuffer } from "../resource/storage-buffer.js";
 import type { ShaderDefineMap, ShaderUniformType, ShaderUniformValue } from "../material/shader/shader-material.js";
 
-/** A uniform available to the compute entry point. */
+/** A uniform constant across the dispatch. Per-item data belongs in a storage buffer. */
 export interface ComputeUniformDecl {
     readonly name: string;
     readonly type: ShaderUniformType;
@@ -44,7 +58,7 @@ export interface ComputeStorageBufferDecl {
 /** Options for {@link createComputeShader}. */
 export interface ComputeShaderOptions {
     readonly name?: string;
-    /** WGSL body. The uniform/storage declarations are generated and prepended. */
+    /** WGSL body. Uniform and storage declarations are generated and prepended. */
     readonly computeSource: string;
     /** Entry point name. Default `"main"`. */
     readonly entryPoint?: string;
@@ -65,16 +79,9 @@ export interface ComputeShader {
     /** @internal */ readonly _uniformDecls: readonly ComputeUniformDecl[];
     /** @internal */ readonly _storageDecls: readonly ComputeStorageBufferDecl[];
     /** @internal */ readonly _uboSpec: UboSpec | null;
-    /** @internal Staging copy of the current uniform values. */
-    _uboData: ArrayBuffer | null;
-    /** @internal Ring of per-dispatch uniform slots (see the dynamic-offset note). */
-    _uboBuffer: GPUBuffer | null;
-    /** @internal Aligned byte stride between ring slots. */
-    _uboStride: number;
-    /** @internal Ring capacity in slots. */
-    _uboSlots: number;
-    /** @internal Next free ring slot for this submit. */
-    _uboCursor: number;
+    /** @internal */ _uboData: ArrayBuffer | null;
+    /** @internal */ _uboBuffer: GPUBuffer | null;
+    /** @internal */ _uboDirty: boolean;
     /** @internal */ _bindings: Map<string, StorageBuffer>;
     /** @internal */ _layout: GPUBindGroupLayout | null;
     /** @internal */ _pipeline: GPUComputePipeline | null;
@@ -83,19 +90,14 @@ export interface ComputeShader {
     /** @internal */ _destroyed: boolean;
 }
 
-/** @internal Batch state, kept on the engine so unused batching costs nothing. */
-interface ComputeBatchState {
-    encoder: GPUCommandEncoder | null;
-    depth: number;
-    /** Shaders that took uniform-ring slots in this batch; reset once it submits. */
-    shaders?: Set<ComputeShader>;
-}
-const batches = new WeakMap<object, ComputeBatchState>();
-
 function assertIdentifier(kind: string, name: string): void {
     if (!/^[A-Za-z_]\w*$/.test(name)) {
         throw new Error(`ComputeShader: ${kind} name "${name}" is not a valid WGSL identifier.`);
     }
+}
+
+function formatF32(value: number): string {
+    return Number.isInteger(value) ? `${value}.0` : String(value);
 }
 
 function buildPrelude(options: ComputeShaderOptions, uboSpec: UboSpec | null): string {
@@ -115,43 +117,7 @@ function buildPrelude(options: ComputeShaderOptions, uboSpec: UboSpec | null): s
     return wgsl;
 }
 
-function formatF32(value: number): string {
-    return Number.isInteger(value) ? `${value}.0` : String(value);
-}
-
-function alignTo(n: number, to: number): number {
-    return Math.ceil(n / to) * to;
-}
-
-function uniformOffsetAlignment(engine: EngineContext): number {
-    return engine._device.limits?.minUniformBufferOffsetAlignment ?? 256;
-}
-
-/**
- * Grow the per-dispatch uniform ring to hold at least `slots` entries.
- *
- * Every dispatch needs its OWN copy of the uniform values. `queue.writeBuffer`
- * is ordered against submission, not against recording, so N dispatches sharing
- * one uniform buffer all observe the LAST values written — which silently
- * collapses a batch of differently-parameterised dispatches into N copies of the
- * final one. Each dispatch therefore takes a slot in this ring and binds it with
- * a dynamic offset.
- */
-function ensureUboCapacity(shader: ComputeShader, slots: number): void {
-    if (!shader._uboSpec || slots <= shader._uboSlots) return;
-    const engine = shader._engine;
-    const next = Math.max(slots, shader._uboSlots * 2, 16);
-    shader._uboBuffer?.destroy();
-    shader._uboBuffer = engine._device.createBuffer({
-        label: `${shader.name}-ubo-ring`,
-        size: shader._uboStride * next,
-        usage: globalThis.GPUBufferUsage.UNIFORM | globalThis.GPUBufferUsage.COPY_DST,
-    });
-    shader._uboSlots = next;
-    shader._bindGroupDirty = true; // the bind group references the old buffer
-}
-
-/** Create a compute program. The WGSL declarations for uniforms/storage are generated. */
+/** Create a compute program. WGSL declarations for uniforms and storage are generated. */
 export function createComputeShader(engine: EngineContext, options: ComputeShaderOptions): ComputeShader {
     const uniformDecls = options.uniforms ?? [];
     for (const u of uniformDecls) {
@@ -168,10 +134,8 @@ export function createComputeShader(engine: EngineContext, options: ComputeShade
         _storageDecls: options.storageBuffers ?? [],
         _uboSpec: uboSpec,
         _uboData: uboSpec ? new ArrayBuffer(uboSpec._totalBytes) : null,
-        _uboBuffer: null,
-        _uboStride: uboSpec ? alignTo(uboSpec._totalBytes, uniformOffsetAlignment(engine)) : 0,
-        _uboSlots: 0,
-        _uboCursor: 0,
+        _uboBuffer: uboSpec ? createEmptyUniformBuffer(engine, uboSpec._totalBytes, `${options.name ?? "compute"}-ubo`) : null,
+        _uboDirty: true,
         _bindings: new Map<string, StorageBuffer>(),
         _layout: null,
         _pipeline: null,
@@ -194,8 +158,7 @@ function bindGroupLayout(shader: ComputeShader): GPUBindGroupLayout {
     let binding = 0;
     const COMPUTE = globalThis.GPUShaderStage.COMPUTE;
     if (shader._uboSpec) {
-        // Dynamic offset: each dispatch binds its own slot of the uniform ring.
-        entries.push({ binding: binding++, visibility: COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true, minBindingSize: shader._uboSpec._totalBytes } });
+        entries.push({ binding: binding++, visibility: COMPUTE, buffer: { type: "uniform" } });
     }
     for (const decl of shader._storageDecls) {
         entries.push({ binding: binding++, visibility: COMPUTE, buffer: { type: decl.writable ? "storage" : "read-only-storage" } });
@@ -204,15 +167,18 @@ function bindGroupLayout(shader: ComputeShader): GPUBindGroupLayout {
     return shader._layout;
 }
 
-function ensurePipeline(shader: ComputeShader): GPUComputePipeline {
-    if (shader._pipeline) return shader._pipeline;
+function pipelineDescriptor(shader: ComputeShader): GPUComputePipelineDescriptor {
     const device = shader._engine._device;
     const module = device.createShaderModule({ code: shader._wgsl, label: `${shader.name}-module` });
-    shader._pipeline = device.createComputePipeline({
+    return {
         label: shader.name,
         layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout(shader)] }),
         compute: { module, entryPoint: shader._entryPoint },
-    });
+    };
+}
+
+function ensurePipeline(shader: ComputeShader): GPUComputePipeline {
+    shader._pipeline ??= shader._engine._device.createComputePipeline(pipelineDescriptor(shader));
     return shader._pipeline;
 }
 
@@ -220,20 +186,14 @@ function ensurePipeline(shader: ComputeShader): GPUComputePipeline {
  * Compile the pipeline off the critical path.
  *
  * `dispatchCompute` compiles synchronously on first use, which stalls the frame
- * it happens on. Awaiting this beforehand moves that cost off the hot path.
+ * it happens on. Awaiting this beforehand moves that cost elsewhere.
  */
 export async function prepareComputeShader(shader: ComputeShader): Promise<void> {
     if (shader._pipeline || shader._destroyed) return;
-    const device = shader._engine._device;
-    const module = device.createShaderModule({ code: shader._wgsl, label: `${shader.name}-module` });
-    shader._pipeline = await device.createComputePipelineAsync({
-        label: shader.name,
-        layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout(shader)] }),
-        compute: { module, entryPoint: shader._entryPoint },
-    });
+    shader._pipeline = await shader._engine._device.createComputePipelineAsync(pipelineDescriptor(shader));
 }
 
-/** Set a declared uniform value. */
+/** Set a declared uniform. Uniforms are constant across a dispatch. */
 export function setComputeUniform(shader: ComputeShader, name: string, value: ShaderUniformValue): void {
     const spec = shader._uboSpec;
     if (!spec || !shader._uboData) throw new Error(`ComputeShader "${shader.name}": no uniforms were declared.`);
@@ -242,18 +202,14 @@ export function setComputeUniform(shader: ComputeShader, name: string, value: Sh
     const decl = shader._uniformDecls.find((u) => u.name === name)!;
     const view = new DataView(shader._uboData);
     const nums = typeof value === "number" ? [value] : Array.from(value as ArrayLike<number>);
-    const int = decl.type === "u32" || decl.type === "i32";
     for (let i = 0; i < nums.length; i++) {
         const at = offset + i * 4;
         if (at + 4 > shader._uboData.byteLength) break;
-        if (int) {
-            if (decl.type === "u32") view.setUint32(at, nums[i]!, true);
-            else view.setInt32(at, nums[i]!, true);
-        } else {
-            view.setFloat32(at, nums[i]!, true);
-        }
+        if (decl.type === "u32") view.setUint32(at, nums[i]!, true);
+        else if (decl.type === "i32") view.setInt32(at, nums[i]!, true);
+        else view.setFloat32(at, nums[i]!, true);
     }
-    // Values are snapshotted into a ring slot at dispatch time, so no dirty flag.
+    shader._uboDirty = true;
 }
 
 /** Bind a storage allocation to a declared storage binding. */
@@ -269,49 +225,24 @@ export function setComputeStorageBuffer(shader: ComputeShader, name: string, buf
 
 function ensureBindGroup(shader: ComputeShader): GPUBindGroup {
     if (shader._bindGroup && !shader._bindGroupDirty) return shader._bindGroup;
-    const device = shader._engine._device;
     const entries: GPUBindGroupEntry[] = [];
     let binding = 0;
-    if (shader._uboBuffer) entries.push({ binding: binding++, resource: { buffer: shader._uboBuffer, offset: 0, size: shader._uboSpec!._totalBytes } });
+    if (shader._uboBuffer) entries.push({ binding: binding++, resource: { buffer: shader._uboBuffer } });
     for (const decl of shader._storageDecls) {
         const bound = shader._bindings.get(decl.name);
         if (!bound) throw new Error(`ComputeShader "${shader.name}": storage buffer "${decl.name}" was declared but never bound.`);
         entries.push({ binding: binding++, resource: { buffer: _getStorageBufferHandle(shader._engine, bound) } });
     }
-    shader._bindGroup = device.createBindGroup({ label: `${shader.name}-bindgroup`, layout: bindGroupLayout(shader), entries });
+    shader._bindGroup = shader._engine._device.createBindGroup({ label: `${shader.name}-bindgroup`, layout: bindGroupLayout(shader), entries });
     shader._bindGroupDirty = false;
     return shader._bindGroup;
 }
 
-/** Record several dispatches into one encoder; pair with {@link endComputeBatch}. */
-export function beginComputeBatch(engine: EngineContext): void {
-    const state = batches.get(engine) ?? { encoder: null, depth: 0 };
-    if (state.depth === 0) {
-        state.encoder = engine._device.createCommandEncoder({ label: "compute-batch" });
-    }
-    state.depth++;
-    batches.set(engine, state);
-}
-
-/** Submit the batch opened by {@link beginComputeBatch}. */
-export function endComputeBatch(engine: EngineContext): void {
-    const state = batches.get(engine);
-    if (!state || state.depth === 0) throw new Error("endComputeBatch called without a matching beginComputeBatch.");
-    state.depth--;
-    if (state.depth === 0 && state.encoder) {
-        engine._device.queue.submit([state.encoder.finish()]);
-        state.encoder = null;
-        // The batch is submitted, so every uniform slot it consumed is free again.
-        for (const shader of state.shaders ?? []) shader._uboCursor = 0;
-        state.shaders?.clear();
-    }
-}
-
 /**
- * Run the compute program over `x`×`y`×`z` workgroups.
+ * Run the compute program over `x` by `y` by `z` workgroups and submit it.
  *
- * Submits immediately unless a batch is open. Queue submission is ordered, so a
- * dispatch issued before a frame's draws is visible to those draws.
+ * Cover many items in ONE dispatch by sizing the workgroup count to the whole
+ * work set and indexing per-item parameters out of a storage buffer.
  */
 export function dispatchCompute(engine: EngineContext, shader: ComputeShader, x: number, y = 1, z = 1): void {
     if (shader._destroyed) throw new Error(`ComputeShader "${shader.name}" has been disposed.`);
@@ -319,38 +250,24 @@ export function dispatchCompute(engine: EngineContext, shader: ComputeShader, x:
     if (!(x > 0 && y > 0 && z > 0)) throw new Error(`ComputeShader "${shader.name}": workgroup counts must all be positive.`);
 
     const device = engine._device;
-    const batch = batches.get(engine);
-    const batching = !!batch && batch.depth > 0 && !!batch.encoder;
-
-    // Snapshot this dispatch's uniform values into their own ring slot.
-    let dynamicOffset = 0;
-    if (shader._uboSpec && shader._uboData) {
-        ensureUboCapacity(shader, shader._uboCursor + 1);
-        dynamicOffset = shader._uboCursor * shader._uboStride;
-        device.queue.writeBuffer(shader._uboBuffer!, dynamicOffset, shader._uboData);
-        shader._uboCursor++;
+    if (shader._uboDirty && shader._uboBuffer && shader._uboData) {
+        device.queue.writeBuffer(shader._uboBuffer, 0, shader._uboData);
+        shader._uboDirty = false;
     }
 
     const pipeline = ensurePipeline(shader);
     const bindGroup = ensureBindGroup(shader);
-    const encoder = batching ? batch!.encoder! : device.createCommandEncoder({ label: `${shader.name}-encoder` });
 
+    const encoder = device.createCommandEncoder({ label: `${shader.name}-encoder` });
     const pass = encoder.beginComputePass({ label: `${shader.name}-pass` });
     pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup, shader._uboSpec ? [dynamicOffset] : []);
+    pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(x, y, z);
     pass.end();
-
-    if (!batching) {
-        device.queue.submit([encoder.finish()]);
-        // Slots are only safe to reuse once the work referencing them is submitted.
-        shader._uboCursor = 0;
-    } else {
-        (batch!.shaders ??= new Set()).add(shader);
-    }
+    device.queue.submit([encoder.finish()]);
 }
 
-/** Release the program's GPU objects. Bound storage buffers are NOT owned or freed. */
+/** Release the program's GPU objects. Bound storage buffers are not owned or freed. */
 export function disposeComputeShader(shader: ComputeShader): void {
     if (shader._destroyed) return;
     shader._uboBuffer?.destroy();

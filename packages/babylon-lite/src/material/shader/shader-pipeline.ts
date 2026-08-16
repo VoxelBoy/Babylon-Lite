@@ -334,6 +334,12 @@ ${customSpec._structBody}
 `;
     }
     source = wgsl`${source}${instanceAttrs}`;
+    if (material._drawIndex) {
+        // A builtin, not a location, so it consumes no vertex-buffer slot and
+        // costs nothing when the shader ignores it.
+        source = wgsl`${source}@builtin(instance_index) drawIndex: u32,
+`;
+    }
     source = wgsl`${source}};
 `;
     const finalWorld = _finalWorldResolver?.(material, instanceAttrs !== "");

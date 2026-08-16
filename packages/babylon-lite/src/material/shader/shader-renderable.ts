@@ -500,7 +500,15 @@ function drawPacket(pass: ShaderRenderPass, engine: EngineContext, material: Sha
     }
     pass.setIndexBuffer(gpu.indexBuffer, gpu.indexFormat);
     pass.setBindGroup(1, packet._bindGroup!);
-    pass.drawIndexed(gpu.indexCount, 1, 0, gpu._baseVertex);
+    // `drawIndex` rides in as `firstInstance`, which is what the vertex stage reads as
+    // `@builtin(instance_index)` on a non-instanced draw. Omitted unless set, so the hot
+    // path for canonical meshes stays exactly as it was.
+    const drawIndex = packet.mesh.drawIndex;
+    if (drawIndex) {
+        pass.drawIndexed(gpu.indexCount, 1, 0, gpu._baseVertex, drawIndex);
+    } else {
+        pass.drawIndexed(gpu.indexCount, 1, 0, gpu._baseVertex);
+    }
 }
 
 function ensureCustomUbo(engine: EngineContext, material: ShaderMaterial, customSpec: UboSpec | null): void {

@@ -9,9 +9,34 @@ import { runGpuResourceCallbacks } from "../engine/gpu-resource-retirement.js";
 import { getBilinearSampler } from "../resource/samplers.js";
 import { acquireGPUTexture } from "../resource/gpu-texture-acquire.js";
 import { releaseGPUTexture } from "../resource/gpu-texture-release.js";
+import { getOrCreateSampler } from "../resource/texture-sampler-pool.js";
 import type { RenderTarget, RenderTargetDescriptor } from "../engine/render-target.js";
 import { createRenderTarget, buildRenderTarget, disposeRenderTarget } from "../engine/render-target.js";
 import type { Texture2D } from "./texture-2d.js";
+
+/** How a render target's color attachment should be sampled once it is exposed
+ *  as a texture. Omit the whole object for the historical default: a bilinear,
+ *  clamp-to-edge, single-level sampler.
+ *
+ *  Defaults are deliberately not "whatever the texture supports". A target
+ *  allocated with `mips: true` still samples from level 0 alone unless
+ *  `mipmapFilter` is set, and repeat addressing is never inferred — a tiling
+ *  target is a decision the caller makes, and guessing it wrong turns a tiled
+ *  surface into a stretched edge texel with nothing in the log. */
+export interface RenderTargetTextureSampling {
+    /** U address mode. Default `"clamp-to-edge"`. Use `"repeat"` for a target that tiles. */
+    addressModeU?: GPUAddressMode;
+    /** V address mode. Default `"clamp-to-edge"`. */
+    addressModeV?: GPUAddressMode;
+    /** Minification filter. Default `"linear"`. */
+    minFilter?: GPUFilterMode;
+    /** Magnification filter. Default `"linear"`. */
+    magFilter?: GPUFilterMode;
+    /** Mip filter. Default unset (level 0 only). Requires the target's `mips: true`. */
+    mipmapFilter?: GPUMipmapFilterMode;
+    /** Max anisotropy. Default `1`. WebGPU requires linear min/mag/mip filters above 1. */
+    maxAnisotropy?: number;
+}
 
 /** Eager render-target allocation and sampled attachment facades. */
 export interface RenderTargetTextureResult {
@@ -49,7 +74,12 @@ function checkTargetOwnership(this: RenderTarget): void {
 }
 
 /** @internal Shared eager allocation and attachment ownership for fixed and surface RTT factories. */
-export function _createRenderTargetTexture(engine: EngineContext, descriptor: RenderTargetDescriptor, sampleDepth?: RenderTargetDepthSampler): RenderTargetTextureResult {
+export function _createRenderTargetTexture(
+    engine: EngineContext,
+    descriptor: RenderTargetDescriptor,
+    sampleDepth?: RenderTargetDepthSampler,
+    sampling?: RenderTargetTextureSampling
+): RenderTargetTextureResult {
     const hasColor = !!descriptor.format;
     if (!hasColor && !sampleDepth) {
         throw new Error("Depth-only render-target textures require withSampledDepthTexture as the third argument.");
@@ -61,8 +91,19 @@ export function _createRenderTargetTexture(engine: EngineContext, descriptor: Re
         const texture: Texture2D | null = hasColor
             ? {
                   texture: rt._colorTexture!,
-                  view: rt._colorView!,
-                  sampler: getBilinearSampler(engine),
+                  // `rt._colorView` is the render-pass attachment, which names a single mip
+                  // level. Sampling needs the whole chain, so build a separate full view.
+                  view: descriptor.mips ? rt._colorTexture!.createView() : rt._colorView!,
+                  sampler: sampling
+                      ? getOrCreateSampler(engine, {
+                            addressModeU: sampling.addressModeU ?? "clamp-to-edge",
+                            addressModeV: sampling.addressModeV ?? "clamp-to-edge",
+                            minFilter: sampling.minFilter ?? "linear",
+                            magFilter: sampling.magFilter ?? "linear",
+                            mipmapFilter: sampling.mipmapFilter,
+                            maxAnisotropy: sampling.maxAnisotropy ?? 1,
+                        })
+                      : getBilinearSampler(engine),
                   width: rt._width,
                   height: rt._height,
                   invertY: true,
@@ -88,13 +129,21 @@ export function _createRenderTargetTexture(engine: EngineContext, descriptor: Re
 }
 
 /** Eagerly allocate a fixed-size render target and expose sampled attachment facades. */
-export function createRenderTargetTexture(engine: EngineContext, descriptor: RenderTargetDescriptor, sampleDepth?: RenderTargetDepthSampler): RenderTargetTextureResult {
+export function createRenderTargetTexture(
+    engine: EngineContext,
+    descriptor: RenderTargetDescriptor,
+    sampleDepth?: RenderTargetDepthSampler,
+    sampling?: RenderTargetTextureSampling
+): RenderTargetTextureResult {
     if ("canvas" in descriptor.size || "surface" in descriptor.size) {
         throw new Error(
             "createRenderTargetTexture: descriptor.size must be fixed { width, height } pixels, not a surface-backed size; use createSurfaceRenderTargetTexture for surface-resizing targets."
         );
     }
-    return _createRenderTargetTexture(engine, descriptor, sampleDepth);
+    if (sampling?.mipmapFilter && !descriptor.mips) {
+        throw new Error("createRenderTargetTexture: sampling.mipmapFilter requires the descriptor's mips: true — there would be no levels to filter between.");
+    }
+    return _createRenderTargetTexture(engine, descriptor, sampleDepth, sampling);
 }
 
 /** Release the target's attachment ownership. Sampled consumers may retain its last image.

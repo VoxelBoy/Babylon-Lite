@@ -98,6 +98,24 @@ export interface Mesh extends SceneNode {
     id?: string;
     material: Material;
     receiveShadows: boolean;
+    /** Index this mesh's draw reports to the shader as `@builtin(instance_index)`,
+     *  readable as `input.drawIndex` when the material sets
+     *  `ShaderMaterialOptions.drawIndex`.
+     *
+     *  The point is to let ONE material draw many meshes that each need their own
+     *  data: the material binds a storage buffer of per-object records and each
+     *  mesh's draw indexes its own row. The alternative — a material per mesh —
+     *  duplicates a UBO, a bind group and a pipeline lookup per object.
+     *
+     *  Lives on the mesh, not on `_gpu`, because it identifies the object rather
+     *  than its geometry: clones and glTF instances share one `_gpu` record and
+     *  must be free to point at different rows.
+     *
+     *  Mutable, so a mesh can be reassigned to a different slot without being
+     *  rebuilt. Ignored for thin-instance draws, where the builtin is the
+     *  instance number. Undefined/0 → canonical behaviour, and the hot path
+     *  stays byte-identical for meshes that never set it. */
+    drawIndex?: number;
     /** OBJECT-LOCAL axis-aligned bounding box of this mesh's own geometry — the box the vertex
      *  buffer occupies BEFORE `worldMatrix`, and before any thin-instance matrix. Every reader
      *  composes it the same way the shaders do:

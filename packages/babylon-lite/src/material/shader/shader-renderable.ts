@@ -407,10 +407,13 @@ function drawPacket(pass: ShaderRenderPass, engine: EngineContext, material: Sha
     }
     pass.setIndexBuffer(gpu.indexBuffer, gpu.indexFormat);
     pass.setBindGroup(1, packet._bindGroup);
-    // `_baseVertex` addresses this mesh's slot inside a shared vertex allocation.
-    // Omitted entirely for canonical meshes so the hot path stays byte-identical.
-    if (gpu._baseVertex) {
-        pass.drawIndexed(gpu.indexCount, 1, 0, gpu._baseVertex);
+    // `_baseVertex` addresses this mesh's slot inside a shared vertex allocation;
+    // `drawIndex` rides in as `firstInstance`, which is what the vertex stage
+    // reads as `@builtin(instance_index)` on a non-instanced draw. Both are
+    // omitted entirely for canonical meshes so the hot path stays byte-identical.
+    const drawIndex = packet.mesh.drawIndex;
+    if (gpu._baseVertex || drawIndex) {
+        pass.drawIndexed(gpu.indexCount, 1, 0, gpu._baseVertex ?? 0, drawIndex ?? 0);
     } else {
         pass.drawIndexed(gpu.indexCount);
     }

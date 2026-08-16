@@ -145,6 +145,10 @@ export { createRenderTargetTexture, disposeRenderTargetTexture } from "./texture
 export { createSurfaceRenderTargetTexture, onRenderTargetTextureResize } from "./texture/rtt-surface.js";
 export { withSampledDepthTexture } from "./texture/rtt-depth.js";
 export type { RenderTargetDepthSampler, RenderTargetTextureResult } from "./texture/rtt.js";
+export type { RenderTargetTextureSampling } from "./texture/rtt.js";
+// Fills mip levels 1..N from level 0 for any mipped Texture2D (e.g. a render
+// target allocated with `mips: true`).
+export { generateTextureMipmaps } from "./texture/generate-mipmaps.js";
 // Pooled GPU samplers (same descriptor → same GPUSampler). Public so consumers building their own
 // sampled-texture wrappers around managed render targets don't have to reach into `engine._device`.
 export { getOrCreateSampler, clearSamplerCache } from "./resource/sampler-pool.js";

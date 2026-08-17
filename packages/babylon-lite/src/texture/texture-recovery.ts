@@ -4,6 +4,7 @@ import type { EngineContext } from "../engine/engine.js";
 import type { Texture2D, Texture2DOptions } from "./texture-2d.js";
 import { getOrCreateSampler } from "../resource/gpu-pool.js";
 import { getBilinearSampler } from "../resource/samplers.js";
+import { mipLevelCount } from "./mip-count.js";
 
 /**
  * Rebuilds a single Texture2D after a WebGPU device loss from the pure recovery
@@ -52,10 +53,12 @@ export async function rebuildTexture2D(engine: EngineContext, tex: Texture2D): P
     }
     if (source.kind === "pixels") {
         const options = source.options;
+        const levels = options.mipMaps ? mipLevelCount(source.width, source.height) : 1;
         const texture = engine._device.createTexture({
             size: { width: source.width, height: source.height },
             format: options.srgb ? "rgba8unorm-srgb" : "rgba8unorm",
-            usage: TU.TEXTURE_BINDING | TU.COPY_DST,
+            mipLevelCount: levels,
+            usage: levels > 1 ? TU.TEXTURE_BINDING | TU.COPY_DST | TU.RENDER_ATTACHMENT : TU.TEXTURE_BINDING | TU.COPY_DST,
         });
         engine._device.queue.writeTexture(
             { texture },
@@ -63,6 +66,15 @@ export async function rebuildTexture2D(engine: EngineContext, tex: Texture2D): P
             { bytesPerRow: source.width * 4, rowsPerImage: source.height },
             { width: source.width, height: source.height }
         );
+        // Regenerated HERE, unlike at creation, where the caller owns it. There
+        // is no caller on this path: recovery restores a texture the app already
+        // considers finished, and a rebuilt-but-unfilled chain would be a device
+        // loss that silently degrades sampling instead of recovering from it.
+        // Filling it is always correct, since every level derives from level 0.
+        if (levels > 1) {
+            const { generateMipmaps } = await import("./generate-mipmaps.js");
+            generateMipmaps(engine, texture);
+        }
         tex.texture = texture;
         tex.view = texture.createView();
         tex.sampler = getOrCreateSampler(engine, {
@@ -70,6 +82,7 @@ export async function rebuildTexture2D(engine: EngineContext, tex: Texture2D): P
             addressModeV: options.addressModeV ?? "clamp-to-edge",
             minFilter: options.minFilter ?? "nearest",
             magFilter: options.magFilter ?? "nearest",
+            mipmapFilter: levels > 1 ? "linear" : "nearest",
         });
         tex.width = source.width;
         tex.height = source.height;
@@ -91,16 +104,16 @@ export async function rebuildTexture2D(engine: EngineContext, tex: Texture2D): P
     const width = source.bitmap?.width ?? 1;
     const height = source.bitmap?.height ?? 1;
     const format: GPUTextureFormat = source.srgb ? "rgba8unorm-srgb" : "rgba8unorm";
-    const mipLevelCount = source.mipMaps ? Math.floor(Math.log2(Math.max(width, height))) + 1 : 1;
+    const levels = source.mipMaps ? mipLevelCount(width, height) : 1;
     const texture = engine._device.createTexture({
         size: { width, height },
         format,
-        mipLevelCount,
+        mipLevelCount: levels,
         usage: TU.TEXTURE_BINDING | TU.COPY_DST | TU.COPY_SRC | TU.RENDER_ATTACHMENT,
     });
     if (source.bitmap) {
         engine._device.queue.copyExternalImageToTexture({ source: source.bitmap }, { texture, premultipliedAlpha: false }, { width, height });
-        if (source.mipMaps && mipLevelCount > 1) {
+        if (source.mipMaps && levels > 1) {
             const { generateMipmaps } = await import("./generate-mipmaps.js");
             generateMipmaps(engine, texture);
         }
@@ -146,17 +159,17 @@ async function rebuildUrlTexture2D(engine: EngineContext, url: string, opts: Tex
 
     const width = imageBitmap.width;
     const height = imageBitmap.height;
-    const mipLevelCount = mipMaps ? Math.floor(Math.log2(Math.max(width, height))) + 1 : 1;
+    const levels = mipMaps ? mipLevelCount(width, height) : 1;
     const texture = engine._device.createTexture({
         size: { width, height },
         format,
-        mipLevelCount,
+        mipLevelCount: levels,
         usage: TU.TEXTURE_BINDING | TU.COPY_DST | TU.RENDER_ATTACHMENT,
     });
     engine._device.queue.copyExternalImageToTexture({ source: imageBitmap, flipY: invertY }, { texture, premultipliedAlpha: premultiplyAlpha }, { width, height });
     imageBitmap.close();
 
-    if (mipMaps && mipLevelCount > 1) {
+    if (mipMaps && levels > 1) {
         const { generateMipmaps } = await import("./generate-mipmaps.js");
         generateMipmaps(engine, texture);
     }

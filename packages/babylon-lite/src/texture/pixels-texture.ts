@@ -14,6 +14,11 @@ import { TU } from "../engine/gpu-flags.js";
 import type { Texture2D } from "./texture-2d.js";
 import type { EngineContext } from "../engine/engine.js";
 import { acquireTexture, getOrCreateSampler } from "../resource/gpu-pool.js";
+// Arithmetic only — deliberately NOT `generate-mipmaps.js`, whose blit pipeline
+// and shader would then land in every bundle that creates a pixel texture,
+// including the majority that want no chain. Callers reach it through the
+// already-public `generateTextureMipmaps`; see `PixelsTexture2DOptions.mipMaps`.
+import { mipLevelCount } from "./mip-count.js";
 
 /** Sampler and format overrides for `createTexture2DFromPixels()`. */
 export interface PixelsTexture2DOptions {
@@ -28,6 +33,21 @@ export interface PixelsTexture2DOptions {
     /** Use sRGB format (rgba8unorm-srgb) so the hardware converts to linear on
      *  sample. Use for color data; leave false for lookup tables. Default false. */
     srgb?: boolean;
+    /** Allocate a full mip chain and sample it trilinearly. Default false.
+     *
+     *  The levels are ALLOCATED here but not filled: call
+     *  {@link generateTextureMipmaps} once the pixels are in place. Filling them
+     *  here would be wrong rather than merely convenient, because
+     *  {@link updateTexture2DFromPixels} rewrites level 0 and cannot know to
+     *  rebuild the rest — a chain filled at creation would silently go stale on
+     *  the first update, and stale mips are invisible until something is
+     *  minified. The one exception is device-lost recovery, which has no caller
+     *  to defer to and so regenerates on its own.
+     *
+     *  Without this a texture has a single level, and a sprite minified to a few
+     *  pixels samples one arbitrary texel of it — which reads as aliasing that no
+     *  amount of filtering fixes, since there is nothing to filter between. */
+    mipMaps?: boolean;
 }
 
 /**
@@ -51,10 +71,17 @@ export function createTexture2DFromPixels(engine: EngineContext, data: Uint8Arra
     const device = engine._device;
     const format: GPUTextureFormat = options.srgb ? "rgba8unorm-srgb" : "rgba8unorm";
 
+    const levels = options.mipMaps ? mipLevelCount(width, height) : 1;
+
     const texture = device.createTexture({
         size: { width, height },
         format,
-        usage: TU.TEXTURE_BINDING | TU.COPY_DST,
+        mipLevelCount: levels,
+        // RENDER_ATTACHMENT only when there is a chain to fill: `generateMipmaps`
+        // blits each level into the next as a colour attachment, so the levels
+        // have to be renderable. Adding it unconditionally would widen the usage
+        // of every lookup table and pixel-art texture for nothing.
+        usage: levels > 1 ? TU.TEXTURE_BINDING | TU.COPY_DST | TU.RENDER_ATTACHMENT : TU.TEXTURE_BINDING | TU.COPY_DST,
     });
 
     device.queue.writeTexture({ texture }, data as Uint8Array<ArrayBuffer>, { bytesPerRow: width * 4, rowsPerImage: height }, { width, height });
@@ -64,6 +91,10 @@ export function createTexture2DFromPixels(engine: EngineContext, data: Uint8Arra
         addressModeV: options.addressModeV ?? "clamp-to-edge",
         minFilter: options.minFilter ?? "nearest",
         magFilter: options.magFilter ?? "nearest",
+        // Without this the chain is allocated and never read: WebGPU's default
+        // mipmapFilter is "nearest", which picks one level rather than blending
+        // two, and at a sprite's scale that is most of the aliasing back again.
+        mipmapFilter: levels > 1 ? "linear" : "nearest",
     };
     const sampler = getOrCreateSampler(engine, samplerDesc);
 

@@ -238,11 +238,22 @@ String uniforms are only accepted for known Babylon-style system uniforms. Custo
 ### Sampler declarations
 
 ```typescript
-export type ShaderSamplerOption = string | ShaderSamplerDecl;
+export type ShaderSamplerOption = string | ShaderSampler2DDecl | ShaderSampler3DDecl;
 
-export interface ShaderSamplerDecl {
+/** Flat or layered: texture_2d<f32>, texture_2d_array<f32>, or their depth forms. */
+export interface ShaderSampler2DDecl {
     readonly name: string;
     readonly sampleType?: "float" | "unfilterable-float" | "depth";
+    readonly viewDimension?: "2d" | "2d-array";
+    readonly comparison?: boolean;
+}
+
+/** Volume: texture_3d<f32>. Bind a Texture3D and sample with a vec3<f32> coordinate. */
+export interface ShaderSampler3DDecl {
+    readonly name: string;
+    readonly sampleType?: "float" | "unfilterable-float";
+    readonly viewDimension: "3d";
+    readonly comparison?: false;
 }
 ```
 
@@ -253,7 +264,26 @@ Each sampler name maps to a pair of WGSL bindings:
 @group(1) @binding(N + 1) var textureSamplerSampler: sampler;
 ```
 
-Depth samplers use `texture_depth_2d` and a filtering sampler is not assumed. Public APIs accept `Texture2D` only, never raw GPU handles.
+The texture type follows `viewDimension`, and the bind-group-layout entry is created with that same
+dimension, so the declaration is the single place a sampler's shape is stated:
+
+| `viewDimension` | WGSL texture type      | depth form               |
+| --------------- | ---------------------- | ------------------------ |
+| `"2d"` (default) | `texture_2d<f32>`      | `texture_depth_2d`       |
+| `"2d-array"`    | `texture_2d_array<f32>` | `texture_depth_2d_array` |
+| `"3d"`          | `texture_3d<f32>`      | — (none exists in WGSL)  |
+
+`comparison: true` emits `sampler_comparison` and implies a depth texture; otherwise the sampler is
+`filtering` for `float` and `non-filtering` for `unfilterable-float`. Because WGSL has no
+`texture_depth_3d`, a `"3d"` sampler is never a depth or comparison sampler — `ShaderSampler3DDecl`
+makes that pairing a type error rather than a WebGPU validation failure at pipeline creation. That
+constraint is deliberately carried by the type rather than a runtime check: a `throw` here was
+measured at +62 bytes in every ShaderMaterial scene and, because a new `throw` renumbers every later
+`lite-error` code, +5 bytes in scenes containing no ShaderMaterial at all.
+
+Public APIs accept `Texture2D` only, never raw GPU handles; `Texture2DArray` and `Texture3D` are
+`Texture2D` subtypes carrying their own view dimension, so they bind through the same
+`setShaderTexture` path.
 
 ### Defines
 

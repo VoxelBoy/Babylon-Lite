@@ -260,14 +260,13 @@ function buildBindGroupLayoutEntries(
         entries.push({ binding: nextBinding++, visibility: SHADER_STAGE_ALL, buffer: { type: "uniform" } });
     }
     for (const sampler of samplers) {
-        const isArray = sampler.viewDimension === "2d-array";
         const sampleType = sampler.comparison === true ? "depth" : (sampler.sampleType ?? "float");
         entries.push({
             binding: nextBinding++,
             visibility: SHADER_STAGE_ALL,
             texture: {
                 sampleType,
-                viewDimension: isArray ? "2d-array" : "2d",
+                viewDimension: sampler.viewDimension ?? "2d",
             },
         });
         entries.push({
@@ -302,9 +301,17 @@ ${customSpec._structBody}
     }
     let nextBinding = customSpec ? 2 : 1;
     for (const sampler of material.samplerDecls) {
-        const isArray = sampler.viewDimension === "2d-array";
+        const dim = sampler.viewDimension ?? "2d";
         const isDepth = sampler.comparison === true || sampler.sampleType === "depth";
-        const texType = isDepth ? (isArray ? "texture_depth_2d_array" : "texture_depth_2d") : isArray ? "texture_2d_array<f32>" : "texture_2d<f32>";
+        const texType = isDepth
+            ? dim === "2d-array"
+                ? "texture_depth_2d_array"
+                : "texture_depth_2d"
+            : dim === "2d-array"
+              ? "texture_2d_array<f32>"
+              : dim === "3d"
+                ? "texture_3d<f32>"
+                : "texture_2d<f32>";
         const samplerType = sampler.comparison === true ? "sampler_comparison" : "sampler";
         source = wgsl`${source}@group(1) @binding(${nextBinding++}) var ${sampler.name}: ${texType};
 @group(1) @binding(${nextBinding++}) var ${sampler.name}Sampler: ${samplerType};

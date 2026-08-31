@@ -24,7 +24,7 @@ export type ShaderUniformOption = ShaderSystemUniformName | ShaderUniformDecl;
 /** Accepted value shape when setting a ShaderMaterial uniform. */
 export type ShaderUniformValue = number | readonly number[] | Float32Array;
 /** A sampler entry: either a bare sampler name or an explicit declaration. */
-export type ShaderSamplerOption = string | ShaderSamplerDecl;
+export type ShaderSamplerOption = string | ShaderSampler2DDecl | ShaderSampler3DDecl;
 /** A storage-buffer entry: a read-only WGSL storage binding declaration. */
 export type ShaderStorageBufferOption = ShaderStorageBufferDecl;
 /** Per-attribute vertex FORMAT overrides, applied with `setShaderAttributeFormats`.
@@ -102,16 +102,41 @@ export interface ShaderUniformDecl {
     readonly defaultValue?: number | readonly number[];
 }
 
-/** A sampler declaration: WGSL identifier and the bound texture's sample type. */
+/** A sampler declaration as RESOLVED onto the material: every field filled in. Write one of the
+ *  {@link ShaderSamplerOption} input shapes instead — they constrain which combinations are legal. */
 export interface ShaderSamplerDecl {
     readonly name: string;
     readonly sampleType?: "float" | "unfilterable-float" | "depth";
-    /** Texture view dimension. Default "2d". Use "2d-array" for layered maps such as
-     *  cascaded-shadow (CSM) depth arrays. */
+    /** Texture view dimension. Default "2d". */
+    readonly viewDimension?: "2d" | "2d-array" | "3d";
+    /** Bind a hardware comparison sampler (`sampler_comparison`) for depth compare / PCF
+     *  filtering. Implies a depth texture. Default false. */
+    readonly comparison?: boolean;
+}
+
+/** A sampler over a flat or layered texture: `texture_2d<f32>`, `texture_2d_array<f32>`, or their
+ *  depth forms. Use "2d-array" for layered maps such as cascaded-shadow (CSM) depth arrays. */
+export interface ShaderSampler2DDecl {
+    readonly name: string;
+    readonly sampleType?: "float" | "unfilterable-float" | "depth";
+    /** Texture view dimension. Default "2d". */
     readonly viewDimension?: "2d" | "2d-array";
     /** Bind a hardware comparison sampler (`sampler_comparison`) for depth compare / PCF
      *  filtering. Implies a depth texture. Default false. */
     readonly comparison?: boolean;
+}
+
+/** A sampler over a volume texture — emits `texture_3d<f32>`. Bind a {@link Texture3D} to it
+ *  (see {@link createTexture3DFromPixels}) and sample it with a `vec3<f32>` coordinate.
+ *
+ *  WGSL has no `texture_depth_3d`, so a volume sampler is never a depth or comparison sampler;
+ *  this shape makes that pairing unrepresentable rather than deferring it to a WebGPU validation
+ *  error at pipeline creation. */
+export interface ShaderSampler3DDecl {
+    readonly name: string;
+    readonly sampleType?: "float" | "unfilterable-float";
+    readonly viewDimension: "3d";
+    readonly comparison?: false;
 }
 
 /** A storage buffer declaration. `type` is the WGSL variable type, e.g. `array<vec4<f32>>`. */

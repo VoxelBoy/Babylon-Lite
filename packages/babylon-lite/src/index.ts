@@ -881,6 +881,8 @@ export type {
     ShaderUniformValue,
     ShaderSamplerOption,
     ShaderSamplerDecl,
+    ShaderSampler2DDecl,
+    ShaderSampler3DDecl,
     ShaderDefineValue,
     ShaderDefineMap,
     ShaderDefine,

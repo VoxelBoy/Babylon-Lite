@@ -208,7 +208,9 @@ export interface PixelsTexture3DOptions {
 }
 
 /** A `Texture2D` handle whose underlying GPU texture is `dimension:"3d"`, plus its depth. Bind it to a
- *  fullscreen effect with `viewDimension:"3d"` and sample it in WGSL as `texture_3d<f32>`. */
+ *  fullscreen effect, or to a {@link createShaderMaterial | ShaderMaterial} sampler declared
+ *  `viewDimension:"3d"`, and sample it in WGSL as `texture_3d<f32>`. `StandardMaterial`/`PBRMaterial`
+ *  slots are plain `texture_2d<f32>` and cannot read a volume. */
 export type Texture3D = Texture2D & { depth: number };
 
 /**

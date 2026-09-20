@@ -461,7 +461,9 @@ export function addToScene(scene: SceneContext, entity: Mesh | LightBase | Camer
         // reports the mesh, the frame reports no error, and nothing appears. Say
         // it instead.
         if (!mesh.material) {
-            throw new Error(`addToScene: mesh "${mesh.name ?? "(unnamed)"}" has no material. Assign one before adding it — the render group is resolved from the material at add time, so a material set afterwards never takes effect.`);
+            throw new Error(
+                `addToScene: mesh "${mesh.name ?? "(unnamed)"}" has no material. Assign one before adding it — the render group is resolved from the material at add time, so a material set afterwards never takes effect.`
+            );
         }
         ctx.meshes.push(mesh);
         const build = (mesh.material as unknown as { _buildGroup?: MeshGroupBuilder })._buildGroup;

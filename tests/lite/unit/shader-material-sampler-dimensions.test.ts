@@ -10,6 +10,7 @@ import type { EngineContext } from "../../../packages/babylon-lite/src/engine/en
 import type { RenderTargetSignature } from "../../../packages/babylon-lite/src/engine/render-target";
 import type { ShaderSamplerOption } from "../../../packages/babylon-lite/src/material/shader/shader-material";
 import { createShaderMaterial } from "../../../packages/babylon-lite/src/material/shader/shader-material";
+import { wgsl } from "../../../packages/babylon-lite/src/shader/wgsl";
 import { getOrCreateShaderPipeline, getOrCreateShaderPipelineBindings } from "../../../packages/babylon-lite/src/material/shader/shader-pipeline";
 import { clearSceneBGLCache } from "../../../packages/babylon-lite/src/render/scene-helpers";
 
@@ -34,8 +35,8 @@ function build(samplers: readonly ShaderSamplerOption[]) {
     const engine = { _device: device } as unknown as EngineContext;
 
     const material = createShaderMaterial({
-        vertexSource: "@vertex fn mainVertex(input: VertexInput) -> @builtin(position) vec4f { return vec4f(input.position, 1); }",
-        fragmentSource: "@fragment fn mainFragment() -> @location(0) vec4f { return vec4f(1); }",
+        vertexSource: wgsl`@vertex fn mainVertex(input: VertexInput) -> @builtin(position) vec4f { return vec4f(input.position, 1); }`,
+        fragmentSource: wgsl`@fragment fn mainFragment() -> @location(0) vec4f { return vec4f(1); }`,
         attributes: ["position"],
         samplers,
     });

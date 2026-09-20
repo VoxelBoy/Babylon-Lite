@@ -82,11 +82,12 @@ describe("createRenderTargetTexture sampling", () => {
 
     it("applies repeat addressing, mip filtering and anisotropy when asked", () => {
         const { engine, capture } = makeEngine();
-        createRenderTargetTexture(
-            engine,
-            { format: "rgba8unorm", samples: 1, size: SIZE, mips: true },
-            { addressModeU: "repeat", addressModeV: "repeat", mipmapFilter: "linear", maxAnisotropy: 16 }
-        );
+        createRenderTargetTexture(engine, { format: "rgba8unorm", samples: 1, size: SIZE, mips: true }, undefined, {
+            addressModeU: "repeat",
+            addressModeV: "repeat",
+            mipmapFilter: "linear",
+            maxAnisotropy: 16,
+        });
         expect(capture.samplers).toEqual([
             {
                 addressModeU: "repeat",
@@ -101,7 +102,7 @@ describe("createRenderTargetTexture sampling", () => {
 
     it("samples through the full mip chain, not the level-0 attachment view", () => {
         const { engine, capture } = makeEngine();
-        createRenderTargetTexture(engine, { format: "rgba8unorm", samples: 1, size: SIZE, mips: true }, { mipmapFilter: "linear" });
+        createRenderTargetTexture(engine, { format: "rgba8unorm", samples: 1, size: SIZE, mips: true }, undefined, { mipmapFilter: "linear" });
         // First view is the level-0 attachment, second is the sampled full chain.
         expect(capture.views[0]).toEqual({ baseMipLevel: 0, mipLevelCount: 1 });
         expect(capture.views[1]).toBeUndefined();
@@ -109,6 +110,6 @@ describe("createRenderTargetTexture sampling", () => {
 
     it("rejects mip filtering on a target that has no mip chain", () => {
         const { engine } = makeEngine();
-        expect(() => createRenderTargetTexture(engine, { format: "rgba8unorm", samples: 1, size: SIZE }, { mipmapFilter: "linear" })).toThrow(/mips: true/);
+        expect(() => createRenderTargetTexture(engine, { format: "rgba8unorm", samples: 1, size: SIZE }, undefined, { mipmapFilter: "linear" })).toThrow(/mips: true/);
     });
 });

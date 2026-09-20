@@ -3,16 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import type { EngineContext } from "../../../packages/babylon-lite/src/engine/engine";
 import type { RenderTargetSignature } from "../../../packages/babylon-lite/src/engine/render-target";
 import { createShaderMaterial } from "../../../packages/babylon-lite/src/material/shader/shader-material";
+import { wgsl } from "../../../packages/babylon-lite/src/shader/wgsl";
 import { getOrCreateShaderPipeline, getOrCreateShaderPipelineBindings } from "../../../packages/babylon-lite/src/material/shader/shader-pipeline";
 import { clearShaderPipelineCache } from "../../../packages/babylon-lite/src/material/shader/shader-pipeline-cache";
 import { buildShaderMaterialRenderables } from "../../../packages/babylon-lite/src/material/shader/shader-renderable";
 import { initMeshTransform } from "../../../packages/babylon-lite/src/mesh/mesh";
 import type { SceneContext } from "../../../packages/babylon-lite/src/scene/scene-core";
 
-const VERTEX = `@vertex fn mainVertex(input: VertexInput) -> @builtin(position) vec4<f32> {
+const VERTEX = wgsl`@vertex fn mainVertex(input: VertexInput) -> @builtin(position) vec4<f32> {
   return shaderSystem.worldViewProjection * vec4<f32>(input.position, 1.0);
 }`;
-const FRAGMENT = `@fragment fn mainFragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }`;
+const FRAGMENT = wgsl`@fragment fn mainFragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }`;
 
 function makeEngine() {
     const createShaderModule = vi.fn((descriptor: GPUShaderModuleDescriptor) => descriptor as unknown as GPUShaderModule);
@@ -126,9 +127,10 @@ describe("Mesh.drawIndex", () => {
         draw();
         // drawIndexed(indexCount, instanceCount, firstIndex, baseVertex, firstInstance)
         expect(drawIndexed.mock.calls.map((c) => c[4])).toEqual([undefined, 1, 2, 3]);
-        // Index 0 is the canonical case and must stay on the short call, so
-        // meshes that never set drawIndex keep a byte-identical hot path.
-        expect(drawIndexed.mock.calls[0]).toEqual([3]);
+        // Index 0 is the canonical case: it stays on the draw the engine already
+        // makes for every mesh -- indexCount, one instance, and the slot's baseVertex --
+        // with no firstInstance argument appended.
+        expect(drawIndexed.mock.calls[0]).toEqual([3, 1, 0, undefined]);
     });
 
     it("is mutable, so a mesh can be reassigned to another row without a rebuild", () => {
@@ -140,6 +142,9 @@ describe("Mesh.drawIndex", () => {
     it("leaves meshes that never set it on the canonical draw path", () => {
         const { drawIndexed, draw } = drawFixture([undefined, undefined]);
         draw();
-        expect(drawIndexed.mock.calls).toEqual([[3], [3]]);
+        expect(drawIndexed.mock.calls).toEqual([
+            [3, 1, 0, undefined],
+            [3, 1, 0, undefined],
+        ]);
     });
 });

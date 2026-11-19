@@ -46,7 +46,8 @@ describe("render target mip chains", () => {
         const { engine, capture } = makeEngine();
         const rt = createRenderTarget({ format: "rgba8unorm", samples: 1, size: SIZE });
         buildRenderTarget(rt, engine);
-        expect(capture.textures[0]!.mipLevelCount).toBe(1);
+        // Omitted rather than 1, so a single-level target's descriptor is byte-identical to upstream's.
+        expect(capture.textures[0]!.mipLevelCount ?? 1).toBe(1);
     });
 
     it("allocates a full chain when mips is set", () => {

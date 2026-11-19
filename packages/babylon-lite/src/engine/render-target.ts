@@ -174,10 +174,11 @@ export function buildRenderTarget(rt: RenderTarget, engine: EngineContext): void
             throw new Error(`buildRenderTarget: mips and samples ${desc.samples} are mutually exclusive (WebGPU multisampled textures are single-level).`);
         }
         const mipCount = desc.mips ? mipLevelCount(size.width, size.height) : 1;
-        rt._colorTexture = device.createTexture({
-            ..._createRenderTargetTextureDescriptor(desc, size, desc.format, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING | TU.COPY_SRC | TU.COPY_DST),
-            mipLevelCount: mipCount,
-        });
+        const colorDescriptor = _createRenderTargetTextureDescriptor(desc, size, desc.format, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING | TU.COPY_SRC | TU.COPY_DST);
+        if (mipCount > 1) {
+            colorDescriptor.mipLevelCount = mipCount;
+        }
+        rt._colorTexture = device.createTexture(colorDescriptor);
         // A render-pass attachment must name exactly one mip level, so a mipped
         // target's attachment view is level 0 only. The full-chain view for
         // sampling is built by whoever exposes the texture (see texture/rtt.ts).

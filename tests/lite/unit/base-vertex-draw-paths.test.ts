@@ -23,8 +23,9 @@ describe("indexed offsets reach every draw path", () => {
         const { resolve } = await import("node:path");
         const source = readFileSync(resolve(process.cwd(), file), "utf8");
         const draws = source.match(/pass\.drawIndexed\(/g);
-        const forwarded = source.match(/pass\.drawIndexed\((g|gpu)\.indexCount,\s*[^,;\n]+,\s*\1\._firstIndex\s*\?\?\s*0,\s*\1\._baseVertex\)/g);
-        expect(draws).toHaveLength(1);
+        const forwarded = source.match(/pass\.drawIndexed\((g|gpu)\.indexCount,\s*[^,;\n]+,\s*\1\._firstIndex\s*\?\?\s*0,\s*\1\._baseVertex(?:,\s*drawIndex)?\)/g);
+        // Fork: shader-renderable has a second call that adds `Mesh.drawIndex` as firstInstance.
+        expect(draws!.length).toBeGreaterThanOrEqual(1);
         expect(forwarded).toHaveLength(draws!.length);
     });
 
